@@ -25,7 +25,7 @@ for dir in build/linux-amd64 build/linux-arm64 build/windows-amd64 build/windows
   for file in "$dir"/*; do
     [ -f "$file" ] || continue
     case "$file" in
-      */e7-refresh|*/e7-refresh.exe) continue ;; # raw binaries are not releases
+      */e7-refresh|*/'E7 Refresh.exe') continue ;; # raw binaries are not releases
     esac
     FILES="$FILES $file"
   done

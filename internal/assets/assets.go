@@ -17,9 +17,13 @@ func Dir() string {
 		return dir
 	}
 	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Join(filepath.Dir(exe), "resources")
-		if _, err := os.Stat(filepath.Join(dir, "assets")); err == nil {
-			return dir
+		// mygo build copies the contents of resources/ next to the binary;
+		// a plain `go build` with bin/build keeps them in resources/.
+		base := filepath.Dir(exe)
+		for _, dir := range []string{base, filepath.Join(base, "resources")} {
+			if _, err := os.Stat(filepath.Join(dir, "assets")); err == nil {
+				return dir
+			}
 		}
 	}
 	if cwd, err := os.Getwd(); err == nil {

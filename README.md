@@ -109,8 +109,9 @@ running the headless service at login.
 ## Windows
 
 Build on any machine with `./bin/build-all`, then copy
-`build/windows-amd64/e7-refresh.exe` (and its `resources/` folder) to the
-target, or build the NSIS installer with `WITH_INSTALLER=1`. The installer
+`build/windows-amd64/E7 Refresh.exe` together with its `assets/`,
+`adb-assets/` and `omarchy/` folders to the target, or build the NSIS
+installer with `WITH_INSTALLER=1`. The installer
 puts the app in `%LOCALAPPDATA%\Programs\E7 Refresh`, adds a Start menu
 shortcut, and does not need administrator rights. The tray icon shows in the
 notification area. The Win32/GDI backend finds the emulator window, captures

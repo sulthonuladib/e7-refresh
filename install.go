@@ -28,7 +28,8 @@ func installBarE() error {
 	}
 	candidates := []string{"omarchy", "resources/omarchy"}
 	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "resources", "omarchy"))
+		base := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(base, "omarchy"), filepath.Join(base, "resources", "omarchy"))
 	}
 	source := ""
 	for _, candidate := range candidates {
