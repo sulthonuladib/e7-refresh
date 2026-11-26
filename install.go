@@ -26,10 +26,15 @@ func installBarE() error {
 	if info.Desktop != "omarchy" {
 		return fmt.Errorf("Omarchy is not detected (desktop=%s); other desktops use the AppIndicator tray", info.Desktop)
 	}
-	source := "omarchy"
-	if _, err := os.Stat(filepath.Join(source, "manifest.json")); err != nil {
-		if exe, err := os.Executable(); err == nil {
-			source = filepath.Join(filepath.Dir(exe), "resources", "omarchy")
+	candidates := []string{"omarchy", "resources/omarchy"}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "resources", "omarchy"))
+	}
+	source := ""
+	for _, candidate := range candidates {
+		if _, err := os.Stat(filepath.Join(candidate, "manifest.json")); err == nil {
+			source = candidate
+			break
 		}
 	}
 	if _, err := os.Stat(filepath.Join(source, "manifest.json")); err != nil {

@@ -1,0 +1,15 @@
+[Unit]
+Description=E7 Secret Shop Refresh control service
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/e7-refresh service
+Restart=on-failure
+RestartSec=3
+
+# Mouse and ADB refreshes need access to the user's display and devices.
+# The service itself only opens a local socket; the tray or bar can be
+# started separately with `e7-refresh open`.
+[Install]
+WantedBy=default.target

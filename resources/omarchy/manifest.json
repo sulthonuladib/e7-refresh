@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "e7-refresh",
+  "name": "E7 Refresh",
+  "version": "0.1.0",
+  "description": "Shows the Epic Seven secret shop refresh state in the Omarchy bar. Click to start or stop, middle-click to open settings.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "E7 Refresh",
+    "description": "Refresh count and start/stop control for the Epic Seven secret shop refresher.",
+    "category": "Game",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

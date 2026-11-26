@@ -29,14 +29,17 @@ const Version = "0.1.0"
 
 // Request is one command sent to the service.
 type Request struct {
-	Token  string          `json:"token"`
-	Cmd    string          `json:"cmd"`
-	Config *config.Config  `json:"config,omitempty"`
-	Value  string          `json:"value,omitempty"`
+	ID     string         `json:"id,omitempty"`
+	Token  string         `json:"token"`
+	Cmd    string         `json:"cmd"`
+	Config *config.Config `json:"config,omitempty"`
+	Value  string         `json:"value,omitempty"`
 }
 
-// Response is the reply to one command.
+// Response is the reply to one command. ID echoes the request so bar
+// widgets can have several calls in flight.
 type Response struct {
+	ID      string           `json:"id,omitempty"`
 	OK      bool             `json:"ok"`
 	Error   string           `json:"error,omitempty"`
 	Status  *engine.Stats    `json:"status,omitempty"`
@@ -131,7 +134,9 @@ func (s *Server) handle(conn net.Conn) {
 		write(conn, Response{Error: "unauthorized"})
 		return
 	}
-	write(conn, s.dispatch(req))
+	response := s.dispatch(req)
+	response.ID = req.ID
+	write(conn, response)
 }
 
 func (s *Server) dispatch(req Request) Response {
