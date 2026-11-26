@@ -1,0 +1,19 @@
+# Build output (mygo puts installers, packages and archives here)
+build/
+dist/
+.mygo/
+
+# Local state, settings and refresh history
+ShopRefreshHistory/
+*.csv
+*.log
+
+# Editors and OS cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Secrets and signing material
+*.pfx
+mygo-update.key
