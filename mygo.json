@@ -1,0 +1,25 @@
+{
+  "name": "E7 Refresh",
+  "slug": "e7-refresh",
+  "identifier": "dev.sulthonuladib.e7refresh",
+  "version": "0.1.0",
+  "copyright": "© 2026 sulthonuladib",
+  "license": "GPL-3.0-only",
+  "out": "build",
+  "linux": {
+    "maintainer": "sulthonuladib <sulthonuladib@gmail.com>",
+    "comment": "Refresh the Epic Seven secret shop from the tray or the desktop bar",
+    "categories": ["Utility", "Game"],
+    "webview": false,
+    "command": ["e7-refresh", "e7r"],
+    "depends": {
+      "deb": ["libayatana-appindicator3-1"],
+      "rpm": ["libayatana-appindicator-gtk3"],
+      "arch": ["libayatana-appindicator"]
+    }
+  },
+  "windows": {
+    "displayName": "E7 Secret Shop Refresh",
+    "installDirName": "E7 Refresh"
+  }
+}
