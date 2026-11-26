@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/sulthonuladib/e7-refresh/internal/atomicfile"
 )
 
 // Item is one purchasable item the refresher looks for. Price is the gold
@@ -193,5 +195,5 @@ func Save(c Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, filepath.Join(dir, "config.json"))
+	return atomicfile.Replace(name, filepath.Join(dir, "config.json"))
 }

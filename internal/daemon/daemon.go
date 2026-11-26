@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sulthonuladib/e7-refresh/internal/atomicfile"
 	"github.com/sulthonuladib/e7-refresh/internal/config"
 	"github.com/sulthonuladib/e7-refresh/internal/desktop"
 	"github.com/sulthonuladib/e7-refresh/internal/engine"
@@ -243,7 +244,7 @@ func writeEndpoint(network, address, token string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, endpointFile())
+	return atomicfile.Replace(name, endpointFile())
 }
 
 func readEndpoint() (network, address, token string, err error) {
