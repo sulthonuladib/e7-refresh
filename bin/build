@@ -1,0 +1,11 @@
+#!/bin/sh
+# Quick build of the host binary, with resources beside it.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+OUT="$ROOT/build/dev"
+mkdir -p "$OUT"
+cp -R "$ROOT/resources/." "$OUT/resources/"
+cd "$ROOT"
+go build -o "$OUT/e7-refresh" .
+echo "Built $OUT/e7-refresh"

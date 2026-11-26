@@ -1,0 +1,20 @@
+#!/bin/sh
+# Build installable artifacts for Linux and Windows with MyGo.
+#
+# Linux gets a Debian package, an RPM package, a PKGBUILD for Arch Linux,
+# a tarball with install.sh, and a desktop entry. Windows gets the exe;
+# add a Windows installer by setting WITH_INSTALLER=1 with NSIS installed.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64,windows/amd64,windows/arm64}"
+set -- -platform "$PLATFORMS" -o build
+if [ "${WITH_INSTALLER:-0}" != "1" ]; then
+  set -- "$@" -skip-installer
+fi
+
+go tool mygo build "$@"
+echo
+echo "Artifacts are in $ROOT/build/<os>-<arch>/"

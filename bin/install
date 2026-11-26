@@ -1,0 +1,9 @@
+#!/bin/sh
+# Build the Arch Linux package and install it with pacman.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+go tool mygo build -platform linux/amd64 -skip-installer -o build
+cd build/linux-amd64
+exec makepkg -fsi "$@"

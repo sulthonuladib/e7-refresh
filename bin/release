@@ -1,0 +1,35 @@
+#!/bin/sh
+# Manual, tag-driven release. Build every artifact, then create a draft
+# GitHub release with the files attached. Publishing the draft is a human
+# step; CI for automatic builds and releases comes later.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+TAG="${1:-}"
+if [ -z "$TAG" ]; then
+  echo "usage: bin/release v0.1.0" >&2
+  exit 2
+fi
+if [ -z "$(git tag -l "$TAG")" ]; then
+  echo "tag $TAG does not exist; commit and tag first" >&2
+  exit 2
+fi
+
+"$ROOT/bin/build-all"
+
+FILES=""
+for dir in build/linux-amd64 build/linux-arm64 build/windows-amd64 build/windows-arm64; do
+  [ -d "$dir" ] || continue
+  for file in "$dir"/*; do
+    [ -f "$file" ] || continue
+    case "$file" in
+      */e7-refresh|*/e7-refresh.exe) continue ;; # raw binaries are not releases
+    esac
+    FILES="$FILES $file"
+  done
+done
+
+# shellcheck disable=SC2086
+exec gh release create "$TAG" $FILES --draft --generate-notes --title "$TAG"
