@@ -296,7 +296,13 @@ func decode(data []byte) (image.Image, error) {
 func (d *linuxDesktop) Click(x, y int) error {
 	xs, ys := strconv.Itoa(x), strconv.Itoa(y)
 	if d.input == "ydotool" {
-		_, err := Run(3*time.Second, "ydotool", "mousemove", "--absolute", xs, ys, "click", "1")
+		// ydotool 1.0.4 aborts if mousemove and click share one invocation.
+		if _, err := Run(3*time.Second, "ydotool", "mousemove", "--absolute", xs, ys); err != nil {
+			return err
+		}
+		// ydotool uses a bitmask: 0x40 down + 0x80 up = left click.
+		// Plain "1" is the right button in this version.
+		_, err := Run(3*time.Second, "ydotool", "click", "0xC0")
 		return err
 	}
 	_, err := Run(3*time.Second, "xdotool", "mousemove", "--sync", xs, ys, "click", "--clearmodifiers", "1")
@@ -315,18 +321,18 @@ func (d *linuxDesktop) Drag(x1, y1, x2, y2 int) error {
 	a, b, c, e := strconv.Itoa(x1), strconv.Itoa(y1), strconv.Itoa(x2), strconv.Itoa(y2)
 	tool := d.input
 	if tool == "ydotool" {
-		_, err := Run(3*time.Second, tool, "mousemove", "--absolute", a, b, "mousedown", "1")
-		if err != nil {
-			return err
+		for _, step := range [][]string{
+			{"mousemove", "--absolute", a, b},
+			{"click", "0x40"}, // left button down
+			{"mousemove", "--absolute", c, e},
+			{"click", "0x80"}, // left button up
+		} {
+			if _, err := Run(3*time.Second, tool, step...); err != nil {
+				return err
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(50 * time.Millisecond)
-		_, err = Run(3*time.Second, tool, "mousemove", "--absolute", c, e)
-		time.Sleep(50 * time.Millisecond)
-		_, err2 := Run(3*time.Second, tool, "mouseup", "1")
-		if err != nil {
-			return err
-		}
-		return err2
+		return nil
 	}
 	if _, err := Run(3*time.Second, tool, "mousemove", "--sync", a, b, "mousedown", "1"); err != nil {
 		return err

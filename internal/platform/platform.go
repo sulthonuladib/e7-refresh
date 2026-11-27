@@ -9,9 +9,12 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
+	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -90,5 +93,22 @@ func Run(timeout time.Duration, name string, args ...string) ([]byte, error) {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	return exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if os.Getenv("E7_REFRESH_DEBUG") != "" {
+			log.Printf("platform: %s %v failed: %v stderr=%q", name, args, err, stderr.String())
+		}
+		detail := strings.TrimSpace(stderr.String())
+		if len(detail) > 400 {
+			detail = detail[:400]
+		}
+		if detail != "" {
+			return nil, fmt.Errorf("%s: %w: %s", name, err, detail)
+		}
+		return nil, err
+	}
+	return stdout.Bytes(), nil
 }

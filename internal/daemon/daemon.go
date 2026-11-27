@@ -107,9 +107,20 @@ func (s *Server) Close() error {
 
 // Serve runs the service until ctx is canceled. It writes no GUI.
 func Serve(ctx context.Context, e *engine.Engine) error {
-	s, err := Start(e)
-	if err != nil {
-		return err
+	// A GUI instance may already own the socket. Wait for it to close
+	// instead of exiting and letting systemd restart us in a tight loop.
+	var s *Server
+	for {
+		var err error
+		s, err = Start(e)
+		if err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(2 * time.Second):
+		}
 	}
 	defer s.Close()
 	<-ctx.Done()
