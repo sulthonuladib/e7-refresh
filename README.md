@@ -25,7 +25,7 @@ Or use the package for your distribution from
 | Debian, Ubuntu | `e7-refresh_0.3.0_amd64.deb` → `sudo apt install ./…deb` |
 | Fedora, RHEL | `e7-refresh-0.3.0-1.x86_64.rpm` → `sudo rpm -i …rpm` |
 | Arch, Omarchy | `makepkg -fsi` in the release folder (from `PKGBUILD`) |
-| Windows | `E7 Refresh-setup-0.3.0-amd64.exe`, or the portable `.exe` with its `assets/` folder |
+| Windows | `windows-amd64-e7-refresh-setup-0.3.0-amd64.exe` → run it (the setup bundles the templates) |
 
 ## Use
 
