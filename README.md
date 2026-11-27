@@ -5,8 +5,6 @@ refreshes the shop as often as your budget allows. It lives in the system tray
 or the desktop bar, and on Omarchy/Hyprland it works on a window you never
 have to look at: no cursor movement, no focus stealing, no workspace switch.
 
-![E7 Refresh](resources/icon.png)
-
 ## Install
 
 Linux, no root:
