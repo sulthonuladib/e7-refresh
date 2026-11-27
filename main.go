@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -75,6 +76,22 @@ func fail(err error) {
 	os.Exit(1)
 }
 
+// requireDisplay turns MyGo's low-level GTK error into an actionable one.
+// The headless service has no GUI and never calls this.
+func requireDisplay() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
+		return
+	}
+	fail(fmt.Errorf(`no graphical session found: DISPLAY and WAYLAND_DISPLAY are both empty.
+Start the tray from a terminal inside your desktop session (On Omarchy: Super+Enter),
+or run the background service with no GUI:
+  e7-refresh service
+Then control it with: e7-refresh start | stop | status`))
+}
+
 func runService() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -84,6 +101,7 @@ func runService() {
 }
 
 func runTray() {
+	requireDisplay()
 	client := daemon.NewClient()
 	if !mygo.App.RequestSingleInstanceLock() {
 		_, _ = client.Call(daemon.Request{Cmd: "open"})

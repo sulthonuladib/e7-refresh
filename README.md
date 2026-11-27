@@ -151,6 +151,25 @@ mode. The original game files are never modified.
 `.agents/skills/e7-refresh/` so agents can check status, start and stop runs,
 change settings and find history without opening the UI.
 
+## Troubleshooting
+
+`e7-refresh: mygo: cannot open display (is DISPLAY or WAYLAND_DISPLAY set?)`
+means the **GUI command** was started from a shell outside the graphical
+session (SSH, an agent shell, cron, or a service unit). The tray and settings
+window need a display. Run it from a terminal inside the desktop session
+(Omarchy: `Super+Enter`), or use the headless service instead:
+
+```sh
+e7-refresh service            # no display needed
+e7-refresh start              # from any shell
+e7-refresh status --json
+```
+
+Check your session with `echo $WAYLAND_DISPLAY $DISPLAY`; on Omarchy/Hyprland
+both should normally be set (`wayland-*` and `:0`). For systemd use
+`integrations/e7-refresh.service`, which already starts the `service`
+subcommand.
+
 ## License
 
 GPL-3.0, inherited from the upstream project. See [LICENSE](LICENSE).
