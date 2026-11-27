@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,7 @@ type Server struct {
 	mu       sync.RWMutex
 	open     func()
 	quit     func()
+	tray     func(bool)
 }
 
 // Start binds the local socket and starts accepting commands.
@@ -86,6 +88,14 @@ func (s *Server) SetOpenFunc(fn func()) {
 func (s *Server) SetQuitFunc(fn func()) {
 	s.mu.Lock()
 	s.quit = fn
+	s.mu.Unlock()
+}
+
+// SetTrayFunc lets the GUI show or hide its tray icon on request from the
+// CLI or the settings window.
+func (s *Server) SetTrayFunc(fn func(bool)) {
+	s.mu.Lock()
+	s.tray = fn
 	s.mu.Unlock()
 }
 
@@ -198,6 +208,16 @@ func (s *Server) dispatch(req Request) Response {
 			return Response{Error: "no GUI attached to this service"}
 		}
 		fn()
+		return Response{OK: true}
+	case "tray":
+		enabled := strings.EqualFold(req.Value, "on") || req.Value == "1" || req.Value == "true"
+		s.mu.RLock()
+		fn := s.tray
+		s.mu.RUnlock()
+		if fn == nil {
+			return Response{Error: "no GUI attached to this service"}
+		}
+		fn(enabled)
 		return Response{OK: true}
 	case "version":
 		return Response{OK: true, Info: map[string]string{"version": Version}}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -29,6 +30,8 @@ type dashboard struct {
 	screenshotSleep float64
 	tapSleep        float64
 	adbAddress      string
+	trayEnabled     bool
+	trayApplied     bool
 	message         string
 }
 
@@ -56,6 +59,8 @@ func (d *dashboard) setConfig(cfg config.Config) {
 	d.screenshotSleep = cfg.ScreenshotSleep
 	d.tapSleep = cfg.TapSleep
 	d.adbAddress = cfg.ADBAddress
+	d.trayEnabled = cfg.TrayEnabled
+	d.trayApplied = cfg.TrayEnabled
 }
 
 func (d *dashboard) setStatus(s engine.Stats) { d.status = s }
@@ -77,6 +82,7 @@ func (d *dashboard) currentConfig() config.Config {
 	cfg.ScreenshotSleep = d.screenshotSleep
 	cfg.TapSleep = d.tapSleep
 	cfg.ADBAddress = d.adbAddress
+	cfg.TrayEnabled = d.trayEnabled
 	cfg.Normalize()
 	return cfg
 }
@@ -92,6 +98,16 @@ func (d *dashboard) save() {
 		}
 		mygo.RunOnMain(func() { d.message = message })
 	}()
+}
+
+func (d *dashboard) applyTray() {
+	value := "off"
+	if d.trayEnabled {
+		value = "on"
+	}
+	d.trayApplied = d.trayEnabled
+	d.save()
+	go call(d.client, daemon.Request{Cmd: "tray", Value: value})
 }
 
 func (d *dashboard) start() {
@@ -174,6 +190,10 @@ func (d *dashboard) view(c *ui.Context) {
 				d.setMode("adb")
 			}
 		}
+		ui.Checkbox(c, &d.trayEnabled, "Show tray icon")
+		if d.trayEnabled != d.trayApplied {
+			d.applyTray()
+		}
 
 		ui.Text(c, "Items to buy").Bold()
 		ui.Row(c).Gap(12).Children(func() {
@@ -201,5 +221,24 @@ func (d *dashboard) view(c *ui.Context) {
 				go mygo.Shell.OpenPath(config.HistoryDir())
 			}
 		})
+		serviceLabel := "Install background service"
+		if _, err := os.Stat(serviceUnitPath()); err == nil {
+			serviceLabel = "Remove background service"
+		}
+		if ui.Button(c, serviceLabel).Clicked() {
+			go func() {
+				var err error
+				if _, statErr := os.Stat(serviceUnitPath()); statErr == nil {
+					err = removeServiceE()
+				} else {
+					err = installServiceE()
+				}
+				message := "Background service updated"
+				if err != nil {
+					message = err.Error()
+				}
+				mygo.RunOnMain(func() { d.message = message })
+			}()
+		}
 	})
 }

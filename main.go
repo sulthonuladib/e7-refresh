@@ -35,10 +35,14 @@ func main() {
 		runTray()
 	case "service":
 		runService()
-	case "start", "stop", "status", "config", "detect", "history", "version":
+	case "start", "stop", "status", "config", "detect", "history", "version", "tray":
 		runCLI(command, os.Args[2:])
 	case "install-bar":
 		installBar()
+	case "install-service":
+		installService()
+	case "remove-service":
+		removeService()
 	case "skill":
 		installSkill()
 	case "help", "-h", "--help":
@@ -64,6 +68,9 @@ Usage:
   e7-refresh detect          show the detected desktop and available tools
   e7-refresh history         print the history directory
   e7-refresh install-bar     install the Omarchy bar widget plugin
+  e7-refresh install-service install the systemd user service and enable it
+  e7-refresh remove-service  disable and remove the systemd user service
+  e7-refresh tray on|off     show or hide the tray icon
   e7-refresh skill           install the agent skill in the current folder
   e7-refresh version         print the version
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,10 +30,33 @@ type trayRefs struct {
 	mu        sync.Mutex
 }
 
+// trayHolder keeps the current tray pointer so the status poller can keep
+// updating the right menu when the tray is turned off and on again.
+type trayHolder struct {
+	mu   sync.Mutex
+	refs *trayRefs
+}
+
+func (h *trayHolder) set(refs *trayRefs) {
+	h.mu.Lock()
+	h.refs = refs
+	h.mu.Unlock()
+}
+
+func (h *trayHolder) get() *trayRefs {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.refs
+}
+
+func (h *trayHolder) update(stats engine.Stats) {
+	mygo.RunOnMain(func() { updateTray(h.get(), stats) })
+}
+
 func runApp(client *daemon.Client, server *daemon.Server) {
 	dash := newDashboard(client)
+	holder := &trayHolder{}
 	mygo.App.WhenReady(func() {
-		refs := buildTray(client, dash)
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:       "E7 Secret Shop Refresh",
 			Width:       460,
@@ -42,7 +66,8 @@ func runApp(client *daemon.Client, server *daemon.Server) {
 			Content:     ui.View(dash.view),
 		})
 		dash.win = win
-		// Closing the window hides it: a tray app stays alive with no window.
+		// Closing the window hides it: the service keeps running so the
+		// tray and the bar still work while the window is closed.
 		win.OnClose(func(e *mygo.CloseEvent) {
 			e.PreventDefault()
 			win.Hide()
@@ -50,9 +75,32 @@ func runApp(client *daemon.Client, server *daemon.Server) {
 		if server != nil {
 			server.SetOpenFunc(func() { win.Show(); win.Focus() })
 			server.SetQuitFunc(func() { mygo.App.Quit() })
+			server.SetTrayFunc(func(enabled bool) {
+				mygo.RunOnMain(func() {
+					cfg := dash.currentConfig()
+					cfg.TrayEnabled = enabled
+					dash.setConfig(cfg)
+					current := holder.get()
+					if enabled {
+						if current == nil || current.tray == nil {
+							holder.set(buildTray(client, dash))
+						}
+					} else if current != nil && current.tray != nil {
+						current.tray.Destroy()
+						current.tray = nil
+						dash.show() // keep a way to turn it back on
+					}
+				})
+			})
+		}
+		if dash.cfg.TrayEnabled {
+			holder.set(buildTray(client, dash))
 		}
 		registerHotkeys(client, dash.cfg.StopHotkey)
-		go pollState(client, dash, refs)
+		go pollState(client, dash, holder)
+		// Opening the app from the launcher or menu shows its window.
+		win.Show()
+		win.Focus()
 	})
 	if err := mygo.App.Run(); err != nil {
 		fail(err)
@@ -101,7 +149,7 @@ func buildTray(client *daemon.Client, dash *dashboard) *trayRefs {
 	}
 
 	barItem := &mygo.MenuItem{ID: "install-bar", Label: "Install Omarchy bar widget",
-		Hidden: info.Desktop != "omarchy",
+		Hidden: info.Desktop != "omarchy" || barWidgetInstalled(),
 		Click: func(*mygo.MenuItem, *mygo.Window) {
 			go func() {
 				if err := installBarE(); err != nil {
@@ -110,6 +158,39 @@ func buildTray(client *daemon.Client, dash *dashboard) *trayRefs {
 				}
 				notify("Bar widget installed. Restart the shell if it does not appear.")
 			}()
+		}}
+
+	serviceLabel := "Install background service"
+	if _, err := os.Stat(serviceUnitPath()); err == nil {
+		serviceLabel = "Remove background service"
+	}
+	serviceItem := &mygo.MenuItem{ID: "service", Label: serviceLabel,
+		Click: func(*mygo.MenuItem, *mygo.Window) {
+			go func() {
+				if _, err := os.Stat(serviceUnitPath()); err == nil {
+					if err := removeServiceE(); err != nil {
+						notify("Could not remove the service: " + err.Error())
+						return
+					}
+					notify("Background service removed.")
+					return
+				}
+				if err := installServiceE(); err != nil {
+					notify("Could not install the service: " + err.Error())
+					return
+				}
+				notify("Background service installed and enabled.")
+			}()
+		}}
+
+	trayItem := &mygo.MenuItem{ID: "tray-toggle", Label: "Show tray icon",
+		Type: mygo.MenuItemCheckbox, Checked: dash.cfg.TrayEnabled,
+		Click: func(item *mygo.MenuItem, _ *mygo.Window) {
+			go call(client, daemon.Request{Cmd: "tray",
+				Value: strconv.FormatBool(item.IsChecked())})
+			if !item.IsChecked() {
+				dash.show()
+			}
 		}}
 
 	menu := mygo.NewMenu([]*mygo.MenuItem{
@@ -129,6 +210,8 @@ func buildTray(client *daemon.Client, dash *dashboard) *trayRefs {
 				go mygo.Shell.OpenPath(config.HistoryDir())
 			}},
 		barItem,
+		serviceItem,
+		trayItem,
 		mygo.Separator(),
 		{Role: mygo.RoleQuit},
 	})
@@ -192,7 +275,7 @@ func updateTray(refs *trayRefs, s engine.Stats) {
 	refs.lastRun = s.Running
 }
 
-func pollState(client *daemon.Client, dash *dashboard, refs *trayRefs) {
+func pollState(client *daemon.Client, dash *dashboard, holder *trayHolder) {
 	if response, err := client.Call(daemon.Request{Cmd: "get-config"}); err == nil && response.Config != nil {
 		cfg := *response.Config
 		mygo.RunOnMain(func() { dash.setConfig(cfg) })
@@ -205,10 +288,8 @@ func pollState(client *daemon.Client, dash *dashboard, refs *trayRefs) {
 			continue
 		}
 		s := *response.Status
-		mygo.RunOnMain(func() {
-			dash.setStatus(s)
-			updateTray(refs, s)
-		})
+		mygo.RunOnMain(func() { dash.setStatus(s) })
+		holder.update(s)
 	}
 }
 

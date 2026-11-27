@@ -6,12 +6,20 @@ secret shop from the **system tray** or the **desktop bar** instead of living
 in a permanent window, and runs the same engine as a **headless service**.
 
 ```
-e7-refresh                 # tray app + settings window, starts the service if needed
+e7-refresh                 # opens the app window, starts the tray and service
 e7-refresh service         # headless background service, no display required
 e7-refresh start           # start a refresh from the shell or a bar script
 e7-refresh status --json   # machine-readable state for bars and agents
 e7-refresh stop            # stop after the current action
+e7-refresh install-service # install and enable the systemd user service
+e7-refresh remove-service  # disable and remove it
+e7-refresh tray off|on     # hide or show the tray icon
 ```
+
+Opening the app from the launcher or application menu shows its window; the
+tray icon and bar widget are controls, not the only way in. The tray menu and
+settings window both have toggles for the tray icon and for the background
+service. `install-bar` is hidden once the Omarchy widget is installed.
 
 ## What it does
 
@@ -55,8 +63,9 @@ picks the right helpers:
   screenshots. The window can be moved to the top-left and resized to
   906×539 automatically, like the upstream program.
 - **Wayland**: `grim` for screenshots and `ydotool` for input. On Hyprland,
-  `hyprctl` additionally provides window geometry and focus. On compositors
-  without window IPC, focus the emulator yourself; set
+  `hyprctl` additionally provides window geometry and focus, using the Lua
+  dispatcher syntax of Hyprland 0.56+ with a fallback for older releases. On
+  compositors without window IPC, focus the emulator yourself and set
   `E7_REFRESH_WINDOW_RECT=x,y,w,h` if the macros need explicit coordinates.
 - **Tray**: MyGo uses AppIndicator / StatusNotifierItem over D-Bus, which
   works on X11 and Wayland desktops that support it (GNOME with its

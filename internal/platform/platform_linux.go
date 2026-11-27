@@ -186,11 +186,27 @@ func fallbackRect() (Rect, error) {
 	return Rect{X: 0, Y: 0, W: 1920, H: 1080}, nil
 }
 
+// hyprDispatch uses the Lua dispatcher expressions required by Hyprland
+// 0.56+ with a Lua config, and falls back to the older string syntax.
+func (d *linuxDesktop) hyprDispatch(expression string, legacy ...string) error {
+	out, err := Run(3*time.Second, "hyprctl", "dispatch", expression)
+	if err == nil && !strings.Contains(strings.ToLower(string(out)), "error") {
+		return nil
+	}
+	args := append([]string{"dispatch"}, legacy...)
+	_, fallbackErr := Run(3*time.Second, "hyprctl", args...)
+	if fallbackErr != nil && err != nil {
+		return err
+	}
+	return fallbackErr
+}
+
 func (d *linuxDesktop) Activate(w *Window) error {
 	if d.session == "wayland" {
 		if d.hyprland && w.ID != "" && w.ID != "absolute" {
-			_, err := Run(3*time.Second, "hyprctl", "dispatch", "focuswindow", "address:"+w.ID)
-			return err
+			return d.hyprDispatch(
+				fmt.Sprintf(`hl.dsp.focus({ window = "address:%s" })`, w.ID),
+				"focuswindow", "address:"+w.ID)
 		}
 		return nil // other compositors leave focus with the user
 	}
@@ -203,13 +219,17 @@ func (d *linuxDesktop) MoveResize(w *Window, r Rect) error {
 		if !d.hyprland || w.ID == "" || w.ID == "absolute" {
 			return nil
 		}
-		if _, err := Run(3*time.Second, "hyprctl", "dispatch", "moveactive", "exact",
-			strconv.Itoa(r.X), strconv.Itoa(r.Y)); err != nil {
+		address := "address:" + w.ID
+		x, y, width, height := strconv.Itoa(r.X), strconv.Itoa(r.Y),
+			strconv.Itoa(r.W), strconv.Itoa(r.H)
+		if err := d.hyprDispatch(
+			fmt.Sprintf(`hl.dsp.window.move({ window = "%s", x = %s, y = %s, relative = false })`, address, x, y),
+			"moveactive", "exact", x, y); err != nil {
 			return err
 		}
-		_, err := Run(3*time.Second, "hyprctl", "dispatch", "resizeactive", "exact",
-			strconv.Itoa(r.W), strconv.Itoa(r.H))
-		return err
+		return d.hyprDispatch(
+			fmt.Sprintf(`hl.dsp.window.resize({ window = "%s", x = %s, y = %s, relative = false })`, address, width, height),
+			"resizeactive", "exact", width, height)
 	}
 	if _, err := Run(3*time.Second, "xdotool", "windowmove", w.ID,
 		strconv.Itoa(r.X), strconv.Itoa(r.Y)); err != nil {

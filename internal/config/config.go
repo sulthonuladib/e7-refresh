@@ -47,6 +47,7 @@ type Config struct {
 	ADBAddress      string          `json:"adbAddress"`
 	ADBPath         string          `json:"adbPath"`
 	StopHotkey      string          `json:"stopHotkey"`
+	TrayEnabled     bool            `json:"trayEnabled"`
 	AutoStart       bool            `json:"autoStart"`
 }
 
@@ -62,6 +63,7 @@ func Default() Config {
 		TapSleep:        0.3,
 		Hint:            true,
 		StopHotkey:      "Escape",
+		TrayEnabled:     true,
 	}
 }
 
@@ -160,6 +162,14 @@ func Load() (Config, error) {
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, err
+	}
+	// An older config has no trayEnabled key. Its zero value is false, so
+	// read the raw JSON as well to tell "missing" from "explicitly off".
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) == nil {
+		if _, present := raw["trayEnabled"]; !present {
+			c.TrayEnabled = true
+		}
 	}
 	c.Normalize()
 	return c, nil

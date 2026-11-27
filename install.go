@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sulthonuladib/e7-refresh/internal/desktop"
@@ -47,6 +49,106 @@ func installBarE() error {
 	}
 	fmt.Printf("installed bar widget in %s\n", target)
 	return addBarWidget(filepath.Join(os.Getenv("HOME"), ".config", "omarchy", "shell.json"))
+}
+
+// barWidgetInstalled reports whether the Omarchy plugin is both on disk and
+// in the bar layout, so the menu can stop offering to install it again.
+func barWidgetInstalled() bool {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "omarchy", "plugins", "e7-refresh", "manifest.json")); err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "omarchy", "shell.json"))
+	if err != nil {
+		return false
+	}
+	var shell map[string]any
+	if err := json.Unmarshal(data, &shell); err != nil {
+		return false
+	}
+	bar, _ := shell["bar"].(map[string]any)
+	layout, _ := bar["layout"].(map[string]any)
+	right, _ := layout["right"].([]any)
+	for _, entry := range right {
+		if item, ok := entry.(map[string]any); ok && item["id"] == "e7-refresh" {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceUnitPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".config", "systemd", "user", "e7-refresh.service")
+}
+
+func serviceUnit(executable string) string {
+	return fmt.Sprintf(`[Unit]
+Description=E7 Secret Shop Refresh control service
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%s service
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+`, executable)
+}
+
+func runSystemctl(args ...string) error {
+	cmd := exec.Command("systemctl", append([]string{"--user"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func installService() {
+	if err := installServiceE(); err != nil {
+		fail(err)
+	}
+	fmt.Printf("installed and enabled %s\n", serviceUnitPath())
+}
+
+func installServiceE() error {
+	path := serviceUnitPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(serviceUnit(executable)), 0o644); err != nil {
+		return err
+	}
+	if err := runSystemctl("daemon-reload"); err != nil {
+		return err
+	}
+	return runSystemctl("enable", "--now", "e7-refresh.service")
+}
+
+func removeService() {
+	if err := removeServiceE(); err != nil {
+		fail(err)
+	}
+	fmt.Println("background service removed")
+}
+
+func removeServiceE() error {
+	if err := runSystemctl("disable", "--now", "e7-refresh.service"); err != nil {
+		return err
+	}
+	if err := os.Remove(serviceUnitPath()); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return runSystemctl("daemon-reload")
 }
 
 func copyTree(source, target string) error {

@@ -138,6 +138,19 @@ func runCLI(command string, args []string) {
 			fail(err)
 		}
 		fmt.Println(response.Info["dir"])
+
+	case "tray":
+		value := "on"
+		if len(args) > 0 {
+			value = args[0]
+		}
+		if value != "on" && value != "off" {
+			fail(fmt.Errorf("usage: e7-refresh tray on|off"))
+		}
+		if _, err := client.Call(daemon.Request{Cmd: "tray", Value: value}); err != nil {
+			fail(err)
+		}
+		fmt.Printf("tray %s\n", value)
 	}
 }
 
