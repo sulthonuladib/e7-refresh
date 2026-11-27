@@ -47,7 +47,7 @@ game through XWayland without touching your pointer or keyboard.
 | Omarchy / Hyprland | Hidden: `grim -T` capture and XTEST clicks inside Xwayland |
 | GNOME, KDE, X11 | The game window is raised and resized; the pointer moves |
 | Other Wayland compositors | `grim` + `ydotool`, window visible and focused |
-| Windows | The window is shown and the pointer moves |
+| Windows | The window is captured and clicked in the background when the game reads posted messages; otherwise it is shown and the pointer moves |
 | Android emulator | `ADB` mode, no window handling at all |
 
 Missing tools are listed in the panel (`grim`, `xdotool`, `ydotool`,

@@ -113,6 +113,61 @@ game. The remaining gaps, in order of importance:
    compositor-side pointer target (a Hyprland plugin tied to the exact build,
    loaded only with explicit consent) or ADB.
 2. **Wheel events** are not delivered to this game at all; use drags.
-3. **X11 and Windows** still use the old visible-window path. The same
-   `Background()` interface can carry an `XSendEvent`/`PostMessage` backend
-   later without touching the engine again.
+3. **X11** still uses the old visible-window path. The same `Background()`
+   interface can carry an `XSendEvent` backend later without touching the
+   engine again; Windows now has one (below).
+
+## 6. Windows: what is possible, and the catch
+
+Windows has no equivalent of XTEST inside Xwayland. There is no second
+pointer sprite: `SendInput`, `mouse_event` and `SetCursorPos` all act on the
+one system cursor, and a click goes to whatever window is under it. So a
+background refresh cannot use real input while the user keeps working.
+
+What it can use instead:
+
+- **Capture**: `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT)` asks the window
+  to draw itself into a device context. It works for a window that is covered
+  or behind others, and returns all black for windows that refuse to render
+  (some D3D titles) and for minimized windows. That is probed at run time:
+  the window is rendered once, and at least 1% of the sampled pixels have to
+  be non-black before the background path is used.
+- **Input**: posted window messages — `WM_MOUSEMOVE`, `WM_LBUTTONDOWN`,
+  `WM_LBUTTONUP` with client-area coordinates. They go into the window's
+  message queue and never touch the cursor, the focus or the z-order. This is
+  the direct equivalent of what `XSendEvent` does, and it has the same
+  caveat: **the app has to read its message queue**. Unity's Windows player
+  handles `WM_` mouse messages, so this game is a reasonable candidate; a game
+  that switched to Raw Input (`WM_INPUT`) or DirectInput ignores them.
+- Coordinates: `WM_` mouse messages are in client coordinates, so only the
+  client area is captured (the client rect is cropped out of the rendered
+  frame) and the macro works in that space, exactly like the XWayland path.
+
+Implemented in `internal/platform/platform_windows.go` behind the same
+`Background()` interface, so the engine does not have a second code path. If
+the probe fails, the old visible-window path (raise the window, move the
+pointer) is used; `E7_REFRESH_FOREGROUND=1` forces it even when the probe
+succeeds.
+
+**Unverified**: this machine has no Windows install, so the code compiles and
+vets for `windows/amd64` but has never driven the game. Verify on Windows
+with, in the game's shop:
+
+```
+set E7_REFRESH_TEST_WINDOW=Epic Seven
+set E7_REFRESH_TEST_SAVE=C:\tmp\e7.png
+set E7_REFRESH_TEST_CLICK=282,33
+go test ./internal/platform -run Background -v
+```
+
+282,33 is the shop's help button: the page opens and closes with a right
+click, so nothing is bought. If the capture looks right (the saved PNG is the
+shop, not black) but the click does nothing, the game ignores posted messages.
+Two levers are left in that case, in order of cost:
+
+1. Post `WM_ACTIVATE`/`WM_SETFOCUS` once at the start of a run, because a few
+   games check `GetActiveWindow` before handling input. Not implemented; it
+   can confuse the app's own activation state.
+2. Accept the visible-window path (`E7_REFRESH_FOREGROUND=1`) or ADB. A
+   virtual HID driver would give real input, but it drives the same single
+   cursor, so it does not solve "keep using the computer".
