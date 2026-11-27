@@ -96,9 +96,9 @@ BarWidget {
     tooltipText: root.tooltipText
     active: root.running
     onPressed: function (mouseButton) {
-      // Right click starts a run, but never stops one: stopping costs
-      // skystones already spent on the current roll, so it has to be
-      // deliberate (the panel's button, or the stop key).
+      // Right click starts a run, but never stops one: stopping throws away
+      // the skystones already spent on the current roll, so it has to be
+      // deliberate (the panel's Stop button, or Stop in the tray menu).
       if (mouseButton === Qt.LeftButton) root.togglePanel()
       else if (backend.status && backend.status.running) root.togglePanel()
       else backend.toggle()
