@@ -19,13 +19,18 @@ fi
 
 "$ROOT/bin/build-all"
 
-FILES=""
+# The one installer users are meant to run: the curl entry point at the repo
+# root. The install.sh that mygo writes into each build directory would clash
+# by name between arches, so it is not uploaded; this one installs the
+# release archive itself.
+FILES="$ROOT/install.sh"
 for dir in build/linux-amd64 build/linux-arm64 build/windows-amd64 build/windows-arm64; do
   [ -d "$dir" ] || continue
   for file in "$dir"/*; do
     [ -f "$file" ] || continue
     case "$file" in
       */e7-refresh|*/'E7 Refresh.exe') continue ;; # raw binaries are not releases
+      */install.sh) continue ;;                    # replaced by the root one
     esac
     FILES="$FILES $file"
   done

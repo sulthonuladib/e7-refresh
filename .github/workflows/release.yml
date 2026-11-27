@@ -58,9 +58,15 @@ jobs:
             platform="$(basename "$dir")"
             for file in "$dir"*; do
               [ -f "$file" ] || continue
+              case "$(basename "$file")" in
+                e7-refresh | 'E7 Refresh.exe') continue ;;
+                install.sh) continue ;; # the root installer below replaces it
+              esac
               cp "$file" "release/${platform}-$(basename "$file")"
             done
           done
+          # One installer for everyone: the curl entry point at the repo root.
+          cp install.sh release/install.sh
           (cd release && sha256sum * > SHA256SUMS)
           ls -lh release
 
