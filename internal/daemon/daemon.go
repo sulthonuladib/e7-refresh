@@ -27,7 +27,7 @@ import (
 )
 
 // Version is reported by the `status` and CLI commands.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Request is one command sent to the service.
 type Request struct {

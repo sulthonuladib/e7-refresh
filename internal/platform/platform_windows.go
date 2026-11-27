@@ -66,6 +66,12 @@ const (
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
 
+	// Posted once per run when E7_REFRESH_ACTIVATE is set, for games that
+	// check whether they are the active window before handling input.
+	wmActivate = 0x0006
+	wmSetFocus = 0x0007
+	waActive   = 1
+
 	wmMouseMove   = 0x0200
 	wmLButtonDown = 0x0201
 	wmLButtonUp   = 0x0202
@@ -112,6 +118,7 @@ type windowsDesktop struct {
 	target     *Window
 	background bool
 	probed     bool
+	activates  sync.Once
 }
 
 // New returns the Win32 desktop implementation.
@@ -466,10 +473,27 @@ func (d *windowsDesktop) postMouse(hwnd uintptr, message uintptr, wParam uintptr
 	return nil
 }
 
+// nudgeActivation posts WM_ACTIVATE and WM_SETFOCUS so that a game which
+// checks GetActiveWindow before handling input believes it is active. The
+// real focus does not move: these are messages in the window's own queue.
+// Off by default, because a toolkit that trusts them can paint itself as
+// focused while the user is typing somewhere else.
+func (d *windowsDesktop) nudgeActivation(hwnd uintptr) {
+	if os.Getenv("E7_REFRESH_ACTIVATE") == "" {
+		return
+	}
+	d.activates.Do(func() {
+		procPostMessageW.Call(hwnd, wmActivate, waActive, 0)
+		procPostMessageW.Call(hwnd, wmSetFocus, 0, 0)
+		time.Sleep(20 * time.Millisecond)
+	})
+}
+
 // clickBackground clicks a window-local point without touching the cursor.
 // A motion message goes first: games track hover from it, and a press with no
 // preceding move is often dropped as a stray event.
 func (d *windowsDesktop) clickBackground(hwnd uintptr, x, y int) error {
+	d.nudgeActivation(hwnd)
 	if err := d.postMouse(hwnd, wmMouseMove, 0, x, y); err != nil {
 		return err
 	}
@@ -520,6 +544,7 @@ func (d *windowsDesktop) Drag(x1, y1, x2, y2 int) error {
 		if err != nil {
 			return err
 		}
+		d.nudgeActivation(hwnd)
 		if err := d.postMouse(hwnd, wmMouseMove, 0, x1, y1); err != nil {
 			return err
 		}

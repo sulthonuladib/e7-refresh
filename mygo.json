@@ -2,7 +2,7 @@
   "name": "E7 Refresh",
   "slug": "e7-refresh",
   "identifier": "dev.sulthonuladib.e7refresh",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "copyright": "© 2026 sulthonuladib",
   "license": "GPL-3.0-only",
   "out": "build",

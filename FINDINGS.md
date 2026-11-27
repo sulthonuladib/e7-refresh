@@ -166,8 +166,10 @@ shop, not black) but the click does nothing, the game ignores posted messages.
 Two levers are left in that case, in order of cost:
 
 1. Post `WM_ACTIVATE`/`WM_SETFOCUS` once at the start of a run, because a few
-   games check `GetActiveWindow` before handling input. Not implemented; it
-   can confuse the app's own activation state.
+   games check `GetActiveWindow` before handling input. That is implemented
+   and off by default: set `E7_REFRESH_ACTIVATE=1` to try it, since a toolkit
+   that trusts those messages can paint itself as focused while the user is
+   typing somewhere else.
 2. Accept the visible-window path (`E7_REFRESH_FOREGROUND=1`) or ADB. A
    virtual HID driver would give real input, but it drives the same single
    cursor, so it does not solve "keep using the computer".
