@@ -192,6 +192,8 @@ then
 fi
 
 say "Installing $app_name in $app_dir"
+# A fresh account may not have ~/.local yet, and mv cannot create it.
+mkdir -p "$(dirname -- "$app_dir")"
 rm -rf "$app_dir"
 mv "$work/app" "$app_dir"
 
