@@ -83,17 +83,28 @@ func runCLI(command string, args []string) {
 		fmt.Println("refresh started")
 
 	case "stop":
-		if _, err := client.Call(daemon.Request{Cmd: "stop"}); err != nil {
+		if _, err := client.Call(daemon.Request{Cmd: "stop", Source: "the command line"}); err != nil {
 			fail(err)
 		}
 		fmt.Println("refresh stopping")
 
 	case "config":
 		if value := flag(args, "--set"); value != "" {
-			cfg, err := readConfig(value)
+			// Merge into the saved settings instead of replacing them: a
+			// one-key patch used to wipe the window title and every other
+			// field it did not mention.
+			data, err := readConfigFile(value)
 			if err != nil {
 				fail(err)
 			}
+			current, err := client.Call(daemon.Request{Cmd: "get-config"})
+			if err != nil {
+				fail(err)
+			}
+			if current.Config == nil {
+				fail(fmt.Errorf("the service did not return the saved settings"))
+			}
+			cfg := mergeConfig(*current.Config, data)
 			if _, err := client.Call(daemon.Request{Cmd: "set-config", Config: &cfg}); err != nil {
 				fail(err)
 			}
@@ -129,8 +140,19 @@ func runCLI(command string, args []string) {
 		d := response.Desktop
 		fmt.Printf("os: %s (%s)\nsession: %s\ndesktop: %s\nbar: %s\n",
 			d.OS, d.Distro, d.Session, d.Desktop, d.Bar)
+		input := d.InputTool
+		if d.BackgroundControl {
+			// The pointer-moving tool is only a fallback once the window can
+			// be driven in the background.
+			input += " (visible-window fallback)"
+		}
 		fmt.Printf("appindicator: %t\nscreenshot tool: %s\ninput tool: %s\n",
-			d.HasAppIndicator, d.ScreenshotTool, d.InputTool)
+			d.HasAppIndicator, d.ScreenshotTool, input)
+		label := "no"
+		if d.BackgroundControl {
+			label = "yes"
+		}
+		fmt.Printf("background control: %s (%s)\n", label, d.BackgroundMethod)
 
 	case "history":
 		response, err := client.Call(daemon.Request{Cmd: "history"})
@@ -154,14 +176,22 @@ func runCLI(command string, args []string) {
 	}
 }
 
-func readConfig(value string) (config.Config, error) {
+func readConfigFile(value string) ([]byte, error) {
 	data := []byte(value)
 	if _, err := os.Stat(value); err == nil {
-		var err error
-		data, err = os.ReadFile(value)
+		read, err := os.ReadFile(value)
 		if err != nil {
-			return config.Config{}, err
+			return nil, err
 		}
+		data = read
+	}
+	return data, nil
+}
+
+func readConfig(value string) (config.Config, error) {
+	data, err := readConfigFile(value)
+	if err != nil {
+		return config.Config{}, err
 	}
 	var cfg config.Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -179,4 +209,16 @@ func enabledNames(cfg config.Config) []string {
 		}
 	}
 	return names
+}
+
+// mergeConfig applies the keys a patch actually contains over the saved
+// settings. Unmarshalling into the saved struct leaves every absent field
+// alone, so `config --set '{"budget":300}'` changes one field instead of
+// wiping the window title and the rest.
+func mergeConfig(saved config.Config, data []byte) config.Config {
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return saved
+	}
+	saved.Normalize()
+	return saved
 }

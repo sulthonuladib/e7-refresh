@@ -3,11 +3,10 @@
   "id": "e7-refresh",
   "name": "E7 Refresh",
   "version": "0.1.0",
-  "description": "Shows Epic Seven refresh counts and skystones in the Omarchy bar. Click for the settings panel, right-click to start or stop.",
-  "kinds": ["bar-widget", "panel"],
+  "description": "Shows Epic Seven refresh counts and skystones in the Omarchy bar. Click for the control panel, right-click to start or stop.",
+  "kinds": ["bar-widget"],
   "entryPoints": {
-    "barWidget": "BarWidget.qml",
-    "panel": "Panel.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "E7 Refresh",

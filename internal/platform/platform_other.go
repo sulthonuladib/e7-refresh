@@ -24,6 +24,8 @@ func (d *otherDesktop) Activate(*Window) error { return fmt.Errorf("unsupported"
 
 func (d *otherDesktop) MoveResize(*Window, Rect) error { return fmt.Errorf("unsupported") }
 
+func (d *otherDesktop) Geometry(w *Window) (Rect, error) { return w.Rect, nil }
+
 func (d *otherDesktop) Capture() (image.Image, error) { return nil, fmt.Errorf("unsupported") }
 
 func (d *otherDesktop) Click(int, int) error { return fmt.Errorf("unsupported") }
@@ -32,6 +34,12 @@ func (d *otherDesktop) DoubleClick(int, int, time.Duration) error { return fmt.E
 
 func (d *otherDesktop) Drag(int, int, int, int) error { return fmt.Errorf("unsupported") }
 
-func (d *otherDesktop) KeyPressed(string) bool { return false }
-
 func (d *otherDesktop) Requirements() []Requirement { return nil }
+
+func (d *otherDesktop) Background() bool { return false }
+
+// EnsureSessionEnv does nothing where there is no desktop to discover.
+func EnsureSessionEnv() {}
+
+// BackgroundCapability reports whether a window can be driven while hidden.
+func BackgroundCapability() (bool, string) { return false, "mouse refresh is not supported here" }

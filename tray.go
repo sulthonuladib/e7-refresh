@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/sulthonuladib/e7-refresh/internal/daemon"
 	"github.com/sulthonuladib/e7-refresh/internal/desktop"
 	"github.com/sulthonuladib/e7-refresh/internal/engine"
+	"github.com/sulthonuladib/e7-refresh/internal/platform"
 )
 
 // trayRefs are the menu items the status poller keeps up to date.
@@ -53,31 +55,49 @@ func (h *trayHolder) update(stats engine.Stats) {
 	mygo.RunOnMain(func() { updateTray(h.get(), stats) })
 }
 
-func runApp(client *daemon.Client, server *daemon.Server) {
+func runApp(client *daemon.Client, server *daemon.Server, showWindow bool) {
 	// The app lives next to a dark desktop; keep its own surfaces dark too.
 	mygo.Theme.SetSource(mygo.ThemeDark)
+	info := desktop.Detect()
+	omarchy := info.Desktop == "omarchy"
 	dash := newDashboard(client)
+	dash.omarchy = omarchy
+	// Omarchy's shell is the control surface; a StatusNotifier tray is not
+	// shown there. Turn the setting off for good so the window and the CLI
+	// report the same configuration on the next launch.
+	if omarchy && dash.cfg.TrayEnabled {
+		cfg := dash.cfg
+		cfg.TrayEnabled = false
+		dash.setConfig(cfg)
+		_ = config.Save(cfg)
+	}
+	if omarchy {
+		go ensureOmarchyWidget()
+	}
 	holder := &trayHolder{}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:       "E7 Secret Shop Refresh",
-			Width:       460,
-			Height:      640,
+			Width:       520,
+			Height:      700,
 			Hidden:      true,
-			SkipTaskbar: true,
+			SkipTaskbar: false,
 			Content:     ui.View(dash.view),
 		})
 		dash.win = win
 		// Closing the window hides it: the service keeps running so the
-		// tray and the bar still work while the window is closed.
+		// bar and the background service still work while it is closed.
 		win.OnClose(func(e *mygo.CloseEvent) {
 			e.PreventDefault()
 			win.Hide()
 		})
 		if server != nil {
-			server.SetOpenFunc(func() { win.Show(); win.Focus() })
+			server.SetOpenFunc(func() { dash.show() })
 			server.SetQuitFunc(func() { mygo.App.Quit() })
 			server.SetTrayFunc(func(enabled bool) {
+				if omarchy {
+					return // no tray on Omarchy
+				}
 				mygo.RunOnMain(func() {
 					cfg := dash.currentConfig()
 					cfg.TrayEnabled = enabled
@@ -95,24 +115,88 @@ func runApp(client *daemon.Client, server *daemon.Server) {
 				})
 			})
 		}
-		if dash.cfg.TrayEnabled {
+		if !omarchy && dash.cfg.TrayEnabled {
 			holder.set(buildTray(client, dash))
 		}
 		var overlay *overlay
-		// Omarchy shows these numbers in its bar widget instead; other
-		// desktops keep the small always-on-top readout.
-		if desktop.Detect().Desktop != "omarchy" {
+		if !omarchy {
+			// Omarchy shows these numbers in its bar widget instead; other
+			// desktops keep the small always-on-top readout.
 			overlay = newOverlay()
 		}
-		registerHotkeys(client, dash.cfg.StopHotkey)
 		go pollState(client, dash, holder, overlay)
-		// Opening the app from the launcher or menu shows its window.
-		win.Show()
-		win.Focus()
+		if !omarchy || showWindow {
+			dash.show()
+		} else {
+			go summonPanelOrShow(win)
+		}
+		// A second launch (launcher, menu or `e7-refresh`) activates the
+		// running instance. MyGo passes the launcher's activation token, so
+		// this also works on Wayland where an app cannot raise itself.
+		mygo.App.OnSecondInstance(func(args []string, _ string) {
+			wantsSettings := showWindow
+			for _, arg := range args {
+				if strings.EqualFold(arg, "settings") {
+					wantsSettings = true
+				}
+			}
+			mygo.RunOnMain(func() {
+				if omarchy && !wantsSettings {
+					go func() {
+						if !summonOmarchyPanel() {
+							mygo.RunOnMain(dash.show)
+						}
+					}()
+					return
+				}
+				dash.show()
+			})
+		})
 	})
 	if err := mygo.App.Run(); err != nil {
 		fail(err)
 	}
+}
+
+// ensureOmarchyWidget installs the QML bar widget on first launch so the
+// shell, not a tray icon, is the way in. It never touches /usr/share.
+func ensureOmarchyWidget() {
+	if err := ensureBarPlugin(); err != nil {
+		fmt.Fprintln(os.Stderr, "e7-refresh: Omarchy bar widget:", err)
+	}
+}
+
+// summonOmarchyPanel asks the running shell to show the plugin panel. The
+// shell hot-reloads plugins and shell.json, so this also works right after
+// the first install; a few retries cover the reload.
+func summonOmarchyPanel() bool {
+	for attempt := 0; attempt < 20; attempt++ {
+		out, err := platform.Run(4*time.Second, "omarchy-shell", "shell", "summon", "e7-refresh", "{}")
+		if err == nil && strings.TrimSpace(string(out)) == "ok" {
+			return true
+		}
+		if attempt == 2 {
+			// A first install adds the plugin while the shell is running.
+			// Rescanning makes the bar pick up the widget without a restart.
+			_, _ = platform.Run(5*time.Second, "omarchy-shell", "shell", "rescanPlugins")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
+}
+
+// summonPanelOrShow keeps the app usable when the shell is not running or
+// the plugin could not be enabled: the settings window becomes the fallback.
+func summonPanelOrShow(win *mygo.Window) {
+	time.Sleep(400 * time.Millisecond)
+	if summonOmarchyPanel() {
+		return
+	}
+	mygo.RunOnMain(func() {
+		win.Show()
+		win.Focus()
+		go floatSettingsWindow()
+	})
 }
 
 func buildTray(client *daemon.Client, dash *dashboard) *trayRefs {
@@ -126,7 +210,7 @@ func buildTray(client *daemon.Client, dash *dashboard) *trayRefs {
 	refs.stop.Disabled = true
 
 	modeItems := []*mygo.MenuItem{
-		{ID: "mode-mouse", Label: "Host mouse", Type: mygo.MenuItemRadio,
+		{ID: "mode-mouse", Label: "This desktop", Type: mygo.MenuItemRadio,
 			Click: func(item *mygo.MenuItem, _ *mygo.Window) { dash.setMode("mouse") }},
 		{ID: "mode-adb", Label: "ADB", Type: mygo.MenuItemRadio,
 			Click: func(item *mygo.MenuItem, _ *mygo.Window) { dash.setMode("adb") }},
@@ -303,23 +387,6 @@ func pollState(client *daemon.Client, dash *dashboard, holder *trayHolder, overl
 			}
 		})
 		holder.update(s)
-	}
-}
-
-func registerHotkeys(client *daemon.Client, key string) {
-	stop := func() { go call(client, daemon.Request{Cmd: "stop"}) }
-	if key != "" && key != "Escape" {
-		if err := mygo.GlobalShortcut.Register(key, stop); err != nil {
-			fmt.Fprintln(os.Stderr, "e7-refresh: hotkey", key+":", err)
-		}
-	}
-	// Escape matches the upstream app on X11 and Windows. Wayland cannot
-	// grab keys from apps, so the portal shortcut below covers that case.
-	if err := mygo.GlobalShortcut.Register("Escape", stop); err != nil {
-		fmt.Fprintln(os.Stderr, "e7-refresh: Escape hotkey:", err)
-	}
-	if err := mygo.GlobalShortcut.Register("CmdOrCtrl+Shift+S", stop); err != nil {
-		fmt.Fprintln(os.Stderr, "e7-refresh: fallback hotkey:", err)
 	}
 }
 

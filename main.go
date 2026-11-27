@@ -17,6 +17,7 @@ import (
 
 	"github.com/sulthonuladib/e7-refresh/internal/daemon"
 	"github.com/sulthonuladib/e7-refresh/internal/engine"
+	"github.com/sulthonuladib/e7-refresh/internal/platform"
 )
 
 //go:embed resources/tray.png
@@ -26,17 +27,24 @@ var trayIdle []byte
 var trayActive []byte
 
 func main() {
+	// A shell outside the graphical session (kero/tmux pane, bare login) has
+	// no WAYLAND_DISPLAY or DISPLAY; find them before MyGo asks for a window.
+	platform.EnsureSessionEnv()
 	command := "open"
 	if len(os.Args) > 1 {
 		command = strings.ToLower(os.Args[1])
 	}
 	switch command {
 	case "open", "":
-		runTray()
+		runTray(false)
+	case "settings":
+		runTray(true)
 	case "service":
 		runService()
 	case "start", "stop", "status", "config", "detect", "history", "version", "tray":
 		runCLI(command, os.Args[2:])
+	case "probe":
+		runProbe(os.Args[2:])
 	case "install-bar":
 		installBar()
 	case "install-service":
@@ -58,8 +66,10 @@ func usage() {
 	fmt.Printf(`E7 Refresh %s - Epic Seven secret shop refresher
 
 Usage:
-  e7-refresh                 start the tray app (default)
-  e7-refresh open            start the tray app and show its window
+  e7-refresh                 open the app (Omarchy panel, or a window elsewhere)
+  e7-refresh open            same as above
+  e7-refresh settings        open the settings window
+  e7-refresh probe           score the bookmark templates without clicking
   e7-refresh service         run the headless control service (no GUI)
   e7-refresh start           start a refresh run through the running service
   e7-refresh stop            stop the current run
@@ -107,11 +117,14 @@ func runService() {
 	}
 }
 
-func runTray() {
+func runTray(showWindow bool) {
 	requireDisplay()
 	client := daemon.NewClient()
 	if !mygo.App.RequestSingleInstanceLock() {
-		_, _ = client.Call(daemon.Request{Cmd: "open"})
+		// MyGo already forwarded this launch to the running instance,
+		// including the compositor's activation token. The first instance
+		// opens the Omarchy panel or the settings window from
+		// OnSecondInstance; do not also ask the daemon to open a window.
 		return
 	}
 
@@ -124,5 +137,5 @@ func runTray() {
 			server = s
 		}
 	}
-	runApp(client, server)
+	runApp(client, server, showWindow)
 }

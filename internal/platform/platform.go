@@ -1,11 +1,14 @@
 // Package platform is the small abstraction the refresh macros need from the
 // desktop: find and move a window, grab pixels, send mouse events.
 //
-// Linux has two implementations behind one interface. Under X11 the tools
-// are xdotool and an ImageMagick/scrot-style screenshot program; under
-// Wayland they are grim for pixels and ydotool for input, with Hyprland's
-// IPC used for window geometry and focus when it is available. Windows uses
-// the Win32 and GDI APIs through syscalls, with no cgo.
+// Three implementations sit behind one interface. On Hyprland an XWayland
+// window (a game under Proton, which is how Epic Seven runs) is captured and
+// clicked in the background: `grim -T` renders the window on its own and
+// XTEST events are injected inside Xwayland, so the user's pointer, focus and
+// workspace are never touched. Everything else keeps the older path: grim or
+// an X11 screenshot tool grabs the screen and xdotool/ydotool move the real
+// pointer, which needs the window to be visible and focused. Windows uses the
+// Win32 and GDI APIs through syscalls, with no cgo.
 package platform
 
 import (
@@ -33,6 +36,18 @@ type Window struct {
 	Title string
 	Rect  Rect
 	ID    string
+	// Class is the desktop's window class, when it has one. XWayland keeps
+	// several helper windows with the same title, so the class narrows the
+	// search for the window that actually draws the game.
+	Class string
+	// StableID is the compositor's own handle for the toplevel, which
+	// Hyprland exposes for `grim -T`. It addresses the window without
+	// reference to where it is on screen.
+	StableID string
+	// XWayland marks a window that runs through Xwayland. Those keep an X
+	// pointer sprite of their own, so they can be clicked without moving
+	// the compositor's cursor.
+	XWayland bool
 }
 
 // Desktop is everything the mouse macro asks of the operating system.
@@ -41,12 +56,21 @@ type Desktop interface {
 	FindWindow(title string) (*Window, error)
 	Activate(w *Window) error
 	MoveResize(w *Window, r Rect) error
+	// Geometry returns the window's current screen rectangle. A compositor
+	// that re-centres a floating window when it is resized can move it, so
+	// the caller must read the result back instead of trusting the request.
+	Geometry(w *Window) (Rect, error)
 	Capture() (image.Image, error)
 	Click(x, y int) error
 	DoubleClick(x, y int, interval time.Duration) error
 	Drag(x1, y1, x2, y2 int) error
-	KeyPressed(key string) bool
 	Requirements() []Requirement
+	// Background reports whether the window found by FindWindow can be
+	// captured and clicked while it stays hidden and unfocused. When it is
+	// true the caller must not focus, raise or move the window, and the
+	// geometry, pixels and click coordinates are all window-local: the
+	// rectangle starts at 0,0 and the capture is the window itself.
+	Background() bool
 }
 
 // Requirement names an external tool the current desktop needs.

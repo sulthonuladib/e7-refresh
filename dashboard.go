@@ -29,8 +29,12 @@ type dashboard struct {
 	mouseSleep      float64
 	screenshotSleep float64
 	tapSleep        float64
+	windowWidth     float64
+	windowHeight    float64
+	templateWidth   float64
 	adbAddress      string
 	trayEnabled     bool
+	omarchy         bool
 	trayApplied     bool
 	hint            bool
 	matchThreshold  float64
@@ -61,6 +65,9 @@ func (d *dashboard) setConfig(cfg config.Config) {
 	d.mouseSleep = cfg.MouseSleep
 	d.screenshotSleep = cfg.ScreenshotSleep
 	d.tapSleep = cfg.TapSleep
+	d.windowWidth = float64(cfg.WindowWidth)
+	d.windowHeight = float64(cfg.WindowHeight)
+	d.templateWidth = float64(cfg.TemplateWidth)
 	d.adbAddress = cfg.ADBAddress
 	d.trayEnabled = cfg.TrayEnabled
 	d.trayApplied = cfg.TrayEnabled
@@ -72,10 +79,15 @@ func (d *dashboard) setConfig(cfg config.Config) {
 func (d *dashboard) setStatus(s engine.Stats) { d.status = s }
 
 func (d *dashboard) show() {
-	if d.win != nil {
-		d.win.Show()
-		d.win.Focus()
+	if d.win == nil {
+		return
 	}
+	d.win.Show()
+	d.win.Focus()
+	// On a tiling compositor the window would otherwise fill a tile at a
+	// size the two-column form was not laid out for. Float and centre it;
+	// the helper waits for the window manager to map the window.
+	go floatSettingsWindow()
 }
 
 func (d *dashboard) currentConfig() config.Config {
@@ -87,6 +99,9 @@ func (d *dashboard) currentConfig() config.Config {
 	cfg.MouseSleep = d.mouseSleep
 	cfg.ScreenshotSleep = d.screenshotSleep
 	cfg.TapSleep = d.tapSleep
+	cfg.WindowWidth = int(d.windowWidth)
+	cfg.WindowHeight = int(d.windowHeight)
+	cfg.TemplateWidth = int(d.templateWidth)
 	cfg.ADBAddress = d.adbAddress
 	cfg.TrayEnabled = d.trayEnabled
 	cfg.Hint = d.hint
@@ -214,7 +229,9 @@ func (d *dashboard) view(c *ui.Context) {
 					field(c, "Skystone budget (0 = until stopped)", func() {
 						ui.NumberInput(c, &d.budget, 0, 100000, 100)
 					})
-					ui.Checkbox(c, &d.hint, "Show bought-items overlay")
+					if !d.omarchy {
+						ui.Checkbox(c, &d.hint, "Show bought-items overlay")
+					}
 					field(c, "Match sensitivity (lower finds more)", func() {
 						ui.NumberInput(c, &d.matchThreshold, 0.4, 0.95, 0.01)
 					})
@@ -233,12 +250,39 @@ func (d *dashboard) view(c *ui.Context) {
 						ui.NumberInput(c, &d.tapSleep, 0.01, 10, 0.1)
 					})
 					field(c, "ADB address", func() { ui.TextInput(c, &d.adbAddress) })
+					field(c, "Game window size (mouse mode)", func() {
+						ui.Row(c).Gap(6).Children(func() {
+							ui.NumberInput(c, &d.windowWidth, 320, 3840, 10)
+							ui.Text(c, "×").FontSize(12)
+							ui.NumberInput(c, &d.windowHeight, 240, 2160, 10)
+						})
+					})
+					field(c, "Template crop width (advanced)", func() {
+						ui.NumberInput(c, &d.templateWidth, 200, 4096, 1)
+					})
 					field(c, "Custom template folder (optional)", func() {
 						ui.TextInput(c, &d.templateDir)
 					})
-					ui.Checkbox(c, &d.trayEnabled, "Show tray icon")
-					if d.trayEnabled != d.trayApplied {
-						d.applyTray()
+					if d.omarchy {
+						section(c, "Omarchy")
+						ui.Text(c, barWidgetStatus()).FontSize(12)
+						if !barWidgetInstalled() {
+							if ui.Button(c, "Install bar widget").Clicked() {
+								go func() {
+									err := installBarE()
+									message := "Bar widget installed"
+									if err != nil {
+										message = err.Error()
+									}
+									mygo.RunOnMain(func() { d.message = message })
+								}()
+							}
+						}
+					} else {
+						ui.Checkbox(c, &d.trayEnabled, "Show tray icon")
+						if d.trayEnabled != d.trayApplied {
+							d.applyTray()
+						}
 					}
 					serviceButton(c, d)
 				})
@@ -270,6 +314,13 @@ func itemCheckbox(c *ui.Context, id, label string, checked *bool) {
 		ui.Box(c).Width(9).Height(9).Radius(5).Background(itemColor(id))
 		ui.Checkbox(c, checked, label)
 	})
+}
+
+func barWidgetStatus() string {
+	if barWidgetInstalled() {
+		return "The Omarchy bar widget is installed. Click it for this panel; no tray icon is used."
+	}
+	return "The Omarchy bar widget is not installed yet."
 }
 
 func serviceButton(c *ui.Context, d *dashboard) {

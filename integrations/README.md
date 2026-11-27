@@ -12,15 +12,19 @@ e7-refresh service &
 `e7-refresh install-bar` copies the QML plugin into
 `~/.config/omarchy/plugins/e7-refresh` and adds `e7-refresh` to the bar's
 right section in `~/.config/omarchy/shell.json`. The JSON file is backed up
-first; nothing under `/usr/share/omarchy` is touched. Restart the shell if
-the widget does not appear:
+first; nothing under `/usr/share/omarchy` is touched. Launching the app does
+the same on first run, and the shell hot-reloads the plugin and layout. If the
+widget does not appear:
 
 ```sh
 omarchy restart shell
 ```
 
-The widget shows `E7` when idle and `E7 <refreshes>` while refreshing. Left
-click starts or stops; middle click opens the settings window.
+The widget shows `E7` when idle and bought counts plus spent skystones while
+refreshing (for example `E7 C2 M1 · 21`). Left click opens the control panel;
+right click starts or stops. There is no tray
+icon on Omarchy; **Advanced settings** in the panel opens the full settings
+window when you need the fields the panel does not show.
 
 ## GNOME and KDE Plasma
 

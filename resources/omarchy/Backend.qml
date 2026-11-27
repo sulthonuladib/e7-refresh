@@ -10,6 +10,9 @@ Scope {
 
   property var status: ({})
   property var config: ({})
+  // Filled from the daemon's "detect" reply: whether a refresh can capture
+  // and click the game while it stays hidden, and how.
+  property var detect: ({})
   property bool connected: !!sock && sock.connected
   property string socketPath: ""
   property string token: ""
@@ -106,6 +109,7 @@ Scope {
     var cb = root.pending[id]
     delete root.pending[id]
     if (msg.ok && msg.status) root.status = msg.status
+    if (msg.ok && msg.desktop) root.detect = msg.desktop
     if (cb) {
       try {
         cb(msg)
@@ -144,11 +148,41 @@ Scope {
   }
 
   function toggle() {
-    root.call(root.status && root.status.running ? "stop" : "start", null)
+    if (root.status && root.status.running) root.stop()
+    else root.call("start", null)
+  }
+
+  function stop() {
+    root.call("stop", null, { source: "the panel" })
   }
 
   function open() {
     root.call("open", null)
+  }
+
+  // The settings window is the advanced fallback on Omarchy. Launching the
+  // binary again activates the already-running instance through MyGo's
+  // single-instance socket, so no daemon call is involved.
+  function openSettings() {
+    settingsProcess.running = false
+    settingsProcess.running = true
+  }
+
+  function openHistory() {
+    historyProcess.running = false
+    historyProcess.running = true
+  }
+
+  Process {
+    id: settingsProcess
+    command: ["e7-refresh", "settings"]
+    running: false
+  }
+
+  Process {
+    id: historyProcess
+    command: ["sh", "-c", "xdg-open \"$(e7-refresh history)\""]
+    running: false
   }
 
   Timer {
@@ -157,8 +191,12 @@ Scope {
     repeat: true
     running: true
     onTriggered: {
-      if (!root.connected) root.connectNow()
-      else root.call("status", null)
+      if (!root.connected) {
+        root.connectNow()
+        return
+      }
+      root.call("status", null)
+      if (!root.detect || !root.detect.os) root.call("detect", null)
     }
   }
 }

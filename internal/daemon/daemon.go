@@ -27,7 +27,7 @@ import (
 )
 
 // Version is reported by the `status` and CLI commands.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Request is one command sent to the service.
 type Request struct {
@@ -36,17 +36,20 @@ type Request struct {
 	Cmd    string         `json:"cmd"`
 	Config *config.Config `json:"config,omitempty"`
 	Value  string         `json:"value,omitempty"`
+	// Source names what sent a stop, so the run summary can say "the panel"
+	// instead of leaving the user wondering why it ended.
+	Source string `json:"source,omitempty"`
 }
 
 // Response is the reply to one command. ID echoes the request so bar
 // widgets can have several calls in flight.
 type Response struct {
-	ID      string           `json:"id,omitempty"`
-	OK      bool             `json:"ok"`
-	Error   string           `json:"error,omitempty"`
-	Status  *engine.Stats    `json:"status,omitempty"`
-	Config  *config.Config   `json:"config,omitempty"`
-	Desktop *desktop.Info    `json:"desktop,omitempty"`
+	ID      string            `json:"id,omitempty"`
+	OK      bool              `json:"ok"`
+	Error   string            `json:"error,omitempty"`
+	Status  *engine.Stats     `json:"status,omitempty"`
+	Config  *config.Config    `json:"config,omitempty"`
+	Desktop *desktop.Info     `json:"desktop,omitempty"`
 	Info    map[string]string `json:"info,omitempty"`
 }
 
@@ -141,24 +144,29 @@ func (s *Server) accept() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	reader := bufio.NewReaderSize(conn, 64*1024)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return
+	// One connection carries many requests: the Omarchy shell widget keeps a
+	// socket open and polls status every 1.5 seconds. Closing after each reply
+	// made Quickshell log a PeerClosedError and reconnect on every poll.
+	for {
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Minute))
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		var req Request
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			write(conn, Response{Error: "invalid request: " + err.Error()})
+			return
+		}
+		if req.Token != s.token {
+			write(conn, Response{Error: "unauthorized"})
+			return
+		}
+		response := s.dispatch(req)
+		response.ID = req.ID
+		write(conn, response)
 	}
-	var req Request
-	if err := json.Unmarshal([]byte(line), &req); err != nil {
-		write(conn, Response{Error: "invalid request: " + err.Error()})
-		return
-	}
-	if req.Token != s.token {
-		write(conn, Response{Error: "unauthorized"})
-		return
-	}
-	response := s.dispatch(req)
-	response.ID = req.ID
-	write(conn, response)
 }
 
 func (s *Server) dispatch(req Request) Response {
@@ -178,7 +186,11 @@ func (s *Server) dispatch(req Request) Response {
 		}
 		return Response{OK: true}
 	case "stop":
-		if err := s.engine.Stop(); err != nil {
+		source := req.Source
+		if source == "" {
+			source = "a stop request"
+		}
+		if err := s.engine.StopFrom(source); err != nil {
 			return Response{Error: err.Error()}
 		}
 		return Response{OK: true}

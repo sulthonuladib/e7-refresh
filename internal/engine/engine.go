@@ -25,29 +25,31 @@ import (
 
 // Stats is the state shared with the tray, the bar widget and the CLI.
 type Stats struct {
-	Running      bool          `json:"running"`
-	Mode         string        `json:"mode"`
-	StartedAt    time.Time     `json:"startedAt,omitempty"`
-	FinishedAt   time.Time     `json:"finishedAt,omitempty"`
-	RefreshCount int           `json:"refreshCount"`
+	Running      bool            `json:"running"`
+	Mode         string          `json:"mode"`
+	StartedAt    time.Time       `json:"startedAt,omitempty"`
+	FinishedAt   time.Time       `json:"finishedAt,omitempty"`
+	RefreshCount int             `json:"refreshCount"`
 	Counts       map[string]int  `json:"counts"`
 	Items        map[string]bool `json:"items"`
 	Spent        int             `json:"spent"`
-	Gold         int           `json:"gold"`
-	Window       string        `json:"window,omitempty"`
-	Budget       int           `json:"budget"`
-	LastError    string        `json:"lastError,omitempty"`
-	LastResult   string        `json:"lastResult,omitempty"`
+	Gold         int             `json:"gold"`
+	Window       string          `json:"window,omitempty"`
+	Budget       int             `json:"budget"`
+	LastError    string          `json:"lastError,omitempty"`
+	LastResult   string          `json:"lastResult,omitempty"`
 }
 
 // Engine starts and stops refresh runs and publishes their state.
 type Engine struct {
-	mu       sync.RWMutex
-	stats    Stats
-	cfg      config.Config
-	cancel   context.CancelFunc
-	done     chan struct{}
-	onChange func(Stats)
+	mu            sync.RWMutex
+	stopReason    string
+	budgetReached bool
+	stats         Stats
+	cfg           config.Config
+	cancel        context.CancelFunc
+	done          chan struct{}
+	onChange      func(Stats)
 }
 
 // New creates an engine. onChange may be nil; it is called off the UI thread.
@@ -136,12 +138,18 @@ func (e *Engine) Start(c config.Config) error {
 }
 
 // Stop asks the running macro to finish after its current action.
-func (e *Engine) Stop() error {
+func (e *Engine) Stop() error { return e.StopFrom("a stop request") }
+
+// StopFrom stops the run and records what asked for it, so the summary reads
+// "stopped by F10" or "stopped from the panel" instead of looking like the
+// run gave up by itself.
+func (e *Engine) StopFrom(reason string) error {
 	e.mu.Lock()
 	if !e.stats.Running {
 		e.mu.Unlock()
 		return nil
 	}
+	e.stopReason = reason
 	cancel := e.cancel
 	e.mu.Unlock()
 	if cancel != nil {
@@ -176,6 +184,14 @@ func (e *Engine) finish(err error) {
 	}
 	e.stats.LastResult = fmt.Sprintf("%d refreshes, %d skystones, %s gold",
 		e.stats.RefreshCount, e.stats.Spent, formatNumber(e.stats.Gold))
+	if e.stopReason != "" {
+		e.stats.LastResult += " · stopped by " + e.stopReason
+	}
+	if e.budgetReached {
+		e.stats.LastResult += " · budget reached"
+	}
+	e.stopReason = ""
+	e.budgetReached = false
 	e.cancel = nil
 	e.mu.Unlock()
 	e.publish()
@@ -252,12 +268,6 @@ func crop(img image.Image, r platform.Rect) image.Image {
 	return out
 }
 
-// watchStopKey listens on the whole session, including Wayland, by reading
-// keyboard event devices on Linux and GetAsyncKeyState on Windows.
-func (e *Engine) watchStopKey(ctx context.Context, key string) {
-	platform.WatchKey(ctx, key, func() { e.Stop() })
-}
-
 func (e *Engine) increment(id string) {
 	e.mu.Lock()
 	e.stats.Counts[id]++
@@ -279,6 +289,9 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 		return fmt.Errorf("set the emulator window title before starting mouse refresh")
 	}
 	desktop := platform.New()
+	if closer, ok := desktop.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
 	if missing := platform.Missing(desktop.Requirements()); len(missing) > 0 {
 		return fmt.Errorf("%s", platform.FormatRequirements(missing))
 	}
@@ -286,22 +299,36 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := desktop.Activate(window); err != nil {
-		return fmt.Errorf("activate window: %w", err)
+	// On Hyprland an XWayland window is captured and clicked in the background:
+	// nothing is focused, nothing is moved, and the macro can run while the user
+	// works on another workspace. When that is not available the old path still
+	// moves the real pointer, so on Wayland it is refused rather than silently
+	// taking over the user's cursor.
+	background := desktop.Background()
+	if !background && desktop.Kind() == "wayland" {
+		return fmt.Errorf("window %q cannot be driven in the background: it must run through Xwayland (Proton/Steam games do) so its pixels and clicks stay inside it", c.WindowTitle)
 	}
-	if !c.AllowMove {
-		window.Rect = platform.Rect{X: 0, Y: 0, W: 906, H: 539}
-		if err := desktop.MoveResize(window, window.Rect); err != nil {
-			return fmt.Errorf("move window: %w", err)
+	if !background {
+		if err := desktop.Activate(window); err != nil {
+			return fmt.Errorf("activate window: %w", err)
 		}
-	} else if err := desktop.MoveResize(window, window.Rect); err != nil {
-		return fmt.Errorf("resize window: %w", err)
+	}
+	if !c.AllowMove || background {
+		window.Rect = platform.Rect{X: 0, Y: 0, W: c.WindowWidth, H: c.WindowHeight}
+	}
+	if err := desktop.MoveResize(window, window.Rect); err != nil {
+		return fmt.Errorf("move window: %w", err)
+	}
+	// Hyprland re-centres a floating window while resizing it, so read the
+	// rectangle back instead of assuming the request was honoured. Every
+	// click below is placed relative to this rectangle.
+	if rect, err := desktop.Geometry(window); err == nil && rect.Valid() {
+		window.Rect = rect
 	}
 	templates, err := loadTemplates("assets", c, enabled(c))
 	if err != nil {
 		return err
 	}
-	e.watchStopKey(ctx, c.StopHotkey)
 	if !sleep(ctx, duration(c.MouseSleep, 0.01)) {
 		return ctx.Err()
 	}
@@ -311,32 +338,34 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 	if !sleep(ctx, time.Second) {
 		return ctx.Err()
 	}
-	sliding := time.Duration(math.Max(0.7+c.ScreenshotSleep, 1)*float64(time.Second))
+	sliding := time.Duration(math.Max(0.7+c.ScreenshotSleep, 1) * float64(time.Second))
 	defer e.writeHistory("mouse", c)
 
 	for ctx.Err() == nil {
 		if err := desktop.MoveResize(window, window.Rect); err != nil {
 			return err
 		}
+		if rect, err := desktop.Geometry(window); err == nil && rect.Valid() {
+			window.Rect = rect
+		}
 		if !sleep(ctx, sliding) {
 			break
 		}
-		screen, err := grabWindow(desktop, window.Rect)
+		screen, scale, err := grabWindow(desktop, window.Rect, c.TemplateWidth)
 		if err != nil {
 			return err
 		}
 		bought := map[string]bool{}
 		for id, template := range templates {
-			x, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
+			_, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
 			if !ok {
 				continue
 			}
-			if err := buyMouse(ctx, desktop, window.Rect, y, c); err != nil {
+			if err := buyMouse(ctx, desktop, window.Rect, int(math.Round(float64(y)*scale)), c); err != nil {
 				return err
 			}
 			e.increment(id)
 			bought[id] = true
-			_ = x
 		}
 		if ctx.Err() != nil {
 			break
@@ -347,7 +376,7 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 		if !sleep(ctx, duration(c.ScreenshotSleep, 0.3)) {
 			break
 		}
-		screen, err = grabWindow(desktop, window.Rect)
+		screen, scale, err = grabWindow(desktop, window.Rect, c.TemplateWidth)
 		if err != nil {
 			return err
 		}
@@ -359,12 +388,15 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 			if !ok {
 				continue
 			}
-			if err := buyMouse(ctx, desktop, window.Rect, y, c); err != nil {
+			if err := buyMouse(ctx, desktop, window.Rect, int(math.Round(float64(y)*scale)), c); err != nil {
 				return err
 			}
 			e.increment(id)
 		}
 		if e.overBudget(c) {
+			e.mu.Lock()
+			e.budgetReached = true
+			e.mu.Unlock()
 			break
 		}
 		if err := refreshMouse(ctx, desktop, window.Rect, c); err != nil {
@@ -378,17 +410,23 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 	return ctx.Err()
 }
 
-func grabWindow(d platform.Desktop, r platform.Rect) (*vision.Screen, error) {
+// grabWindow captures the window and scales it to the template width. It
+// returns the factor that maps match positions back to screen pixels.
+func grabWindow(d platform.Desktop, r platform.Rect, templateWidth int) (*vision.Screen, float64, error) {
 	frame, err := d.Capture()
 	if err != nil {
-		return nil, fmt.Errorf("screenshot: %w", err)
+		return nil, 0, fmt.Errorf("screenshot: %w", err)
 	}
 	bounds := frame.Bounds()
 	box := image.Rect(r.X, r.Y, r.X+r.W, r.Y+r.H)
 	if !box.In(bounds) {
-		return nil, fmt.Errorf("window %v is outside the captured screen %v", box, bounds)
+		return nil, 0, fmt.Errorf("window %v is outside the captured screen %v; move it fully on screen or enable AllowMove", box, bounds)
 	}
-	return vision.Prepare(crop(frame, r)), nil
+	if templateWidth <= 0 {
+		templateWidth = vision.ReferenceWidth
+	}
+	return vision.Prepare(crop(frame, r), templateWidth),
+		float64(r.W) / float64(templateWidth), nil
 }
 
 func clickShop(ctx context.Context, d platform.Desktop, r platform.Rect, pause time.Duration) error {
@@ -557,6 +595,9 @@ func (e *Engine) runADB(ctx context.Context, c config.Config) error {
 			e.increment(id)
 		}
 		if e.overBudget(c) {
+			e.mu.Lock()
+			e.budgetReached = true
+			e.mu.Unlock()
 			break
 		}
 		xoff, yoff = offset(c.RandomOffset)
@@ -575,12 +616,14 @@ func (e *Engine) runADB(ctx context.Context, c config.Config) error {
 	return ctx.Err()
 }
 
+// adbScreen normalises the frame to the ADB templates' reference width.
+// runADB refuses any resolution but 1920x1080, so this is the native size.
 func adbScreen(device *adb.ADB) (*vision.Screen, error) {
 	img, err := device.Screenshot()
 	if err != nil {
 		return nil, err
 	}
-	return vision.Prepare(img), nil
+	return vision.Prepare(img, 1920), nil
 }
 
 func buyADB(device *adb.ADB, w, h, matchX, matchY int, c config.Config) error {
@@ -608,7 +651,7 @@ func offset(random bool) (float64, float64) {
 	}
 	// Small jitter makes the clicks less mechanical without moving them out
 	// of the button. The ranges match the upstream debug overlay.
-	return float64((time.Now().UnixNano()%151) - 75), float64((time.Now().UnixNano()%51) - 25)
+	return float64((time.Now().UnixNano() % 151) - 75), float64((time.Now().UnixNano() % 51) - 25)
 }
 
 func duration(seconds, minimum float64) time.Duration {
@@ -657,6 +700,12 @@ func (e *Engine) writeHistory(mode string, c config.Config) {
 			header = append(header, item.Name)
 		}
 		_ = w.Write(header)
+	}
+	if s.FinishedAt.IsZero() {
+		// writeHistory runs from a defer inside the run, before finish()
+		// stamps the end time; without this the duration is a zero-value
+		// subtraction and prints -2562047h.
+		s.FinishedAt = time.Now()
 	}
 	var row []string
 	if mode == "mouse" {

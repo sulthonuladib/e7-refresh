@@ -20,10 +20,21 @@ func installBar() {
 	if err := installBarE(); err != nil {
 		fail(err)
 	}
-	fmt.Println("added e7-refresh to the bar; run `omarchy restart shell` if it does not appear")
+	fmt.Println("added e7-refresh to the bar; Omarchy reloads the plugin and shell.json automatically")
 }
 
 func installBarE() error {
+	if err := ensureBarPlugin(); err != nil {
+		return err
+	}
+	fmt.Printf("installed bar widget in %s\n", barPluginDir())
+	return nil
+}
+
+// ensureBarPlugin copies the current QML into the user's plugin directory and
+// makes sure the widget is in the bar. It runs on every Omarchy launch so a
+// new build's panel replaces the old one; it never touches /usr/share.
+func ensureBarPlugin() error {
 	info := desktop.Detect()
 	if info.Desktop != "omarchy" {
 		return fmt.Errorf("Omarchy is not detected (desktop=%s); other desktops use the AppIndicator tray", info.Desktop)
@@ -43,12 +54,14 @@ func installBarE() error {
 	if _, err := os.Stat(filepath.Join(source, "manifest.json")); err != nil {
 		return fmt.Errorf("bar plugin files not found in %q", source)
 	}
-	target := filepath.Join(os.Getenv("HOME"), ".config", "omarchy", "plugins", "e7-refresh")
-	if err := copyTree(source, target); err != nil {
+	if err := copyTree(source, barPluginDir()); err != nil {
 		return err
 	}
-	fmt.Printf("installed bar widget in %s\n", target)
 	return addBarWidget(filepath.Join(os.Getenv("HOME"), ".config", "omarchy", "shell.json"))
+}
+
+func barPluginDir() string {
+	return filepath.Join(os.Getenv("HOME"), ".config", "omarchy", "plugins", "e7-refresh")
 }
 
 // barWidgetInstalled reports whether the Omarchy plugin is both on disk and
@@ -58,7 +71,7 @@ func barWidgetInstalled() bool {
 	if home == "" {
 		return false
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "omarchy", "plugins", "e7-refresh", "manifest.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(barPluginDir(), "manifest.json")); err != nil {
 		return false
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "omarchy", "shell.json"))
@@ -233,6 +246,8 @@ The app runs a local control service shared by the tray, the Omarchy bar and
 the CLI. Commands exit 0 on success and print errors on stderr.
 
 - ` + "`e7-refresh status --json`" + ` — current run as JSON: running, mode, refreshCount, counts, spent, gold, lastError.
+- ` + "`e7-refresh probe --json`" + ` — score every bookmark template in the current window without clicking; saves an annotated image.
+- ` + "`e7-refresh settings`" + ` — open the settings window (on Omarchy the bar panel is the primary UI).
 - ` + "`e7-refresh start`" + ` — start a run with the saved settings. Add ` + "`--config '{\"mode\":\"adb\"}'`" + ` to override them for this run.
 - ` + "`e7-refresh stop`" + ` — ask the current run to stop after its current action.
 - ` + "`e7-refresh config --json`" + ` — read settings; ` + "`--set '<json>'`" + ` writes them atomically.

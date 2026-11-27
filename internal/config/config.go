@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/sulthonuladib/e7-refresh/internal/atomicfile"
+	"github.com/sulthonuladib/e7-refresh/internal/vision"
 )
 
 // Item is one purchasable item the refresher looks for. Price is the gold
@@ -42,11 +43,13 @@ type Config struct {
 	ScreenshotSleep float64         `json:"screenshotSleep"`
 	TapSleep        float64         `json:"tapSleep"`
 	AllowMove       bool            `json:"allowMove"`
+	WindowWidth     int             `json:"windowWidth"`
+	WindowHeight    int             `json:"windowHeight"`
+	TemplateWidth   int             `json:"templateWidth"`
 	Hint            bool            `json:"hint"`
 	RandomOffset    bool            `json:"randomOffset"`
 	ADBAddress      string          `json:"adbAddress"`
 	ADBPath         string          `json:"adbPath"`
-	StopHotkey      string          `json:"stopHotkey"`
 	TrayEnabled     bool            `json:"trayEnabled"`
 	MatchThreshold  float64         `json:"matchThreshold"`
 	TemplateDir     string          `json:"templateDir"`
@@ -63,8 +66,10 @@ func Default() Config {
 		MouseSleep:      0.3,
 		ScreenshotSleep: 0.3,
 		TapSleep:        0.3,
+		WindowWidth:     1280,
+		WindowHeight:    720,
+		TemplateWidth:   vision.ReferenceWidth,
 		Hint:            true,
-		StopHotkey:      "Escape",
 		TrayEnabled:     true,
 		MatchThreshold:  0.62,
 	}
@@ -103,14 +108,29 @@ func (c *Config) Normalize() {
 	if c.Budget < 0 {
 		c.Budget = 0
 	}
+	if c.WindowWidth < 320 {
+		c.WindowWidth = def.WindowWidth
+	}
+	if c.WindowHeight < 240 {
+		c.WindowHeight = def.WindowHeight
+	}
+	if c.WindowWidth > 3840 {
+		c.WindowWidth = 3840
+	}
+	if c.WindowHeight > 2160 {
+		c.WindowHeight = 2160
+	}
+	if c.TemplateWidth < 200 {
+		c.TemplateWidth = def.TemplateWidth
+	}
+	if c.TemplateWidth > 4096 {
+		c.TemplateWidth = 4096
+	}
 	if c.MatchThreshold <= 0 {
 		c.MatchThreshold = def.MatchThreshold
 	}
 	if c.MatchThreshold > 0.95 {
 		c.MatchThreshold = 0.95
-	}
-	if c.StopHotkey == "" {
-		c.StopHotkey = def.StopHotkey
 	}
 	if c.ADBAddress == "" {
 		c.ADBAddress = "127.0.0.1:5555"

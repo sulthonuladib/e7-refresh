@@ -24,6 +24,10 @@ type Info struct {
 	HasAppIndicator bool   `json:"hasAppIndicator"`
 	ScreenshotTool  string `json:"screenshotTool"`
 	InputTool       string `json:"inputTool"`
+	// BackgroundControl says whether a refresh can capture and click the game
+	// while it stays hidden and unfocused; BackgroundMethod explains how.
+	BackgroundControl bool   `json:"backgroundControl"`
+	BackgroundMethod  string `json:"backgroundMethod"`
 }
 
 // Detect returns the current desktop environment.
@@ -33,6 +37,7 @@ func Detect() Info {
 		Distro:  distro(),
 		Session: platform.New().Kind(),
 	}
+	info.BackgroundControl, info.BackgroundMethod = platform.BackgroundCapability()
 	name := strings.ToLower(os.Getenv("XDG_CURRENT_DESKTOP"))
 	if info.OS == "windows" {
 		info.Desktop = "windows"

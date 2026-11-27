@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -31,17 +30,17 @@ var (
 	procReleaseDC            = user32.NewProc("ReleaseDC")
 	procGetSystemMetrics     = user32.NewProc("GetSystemMetrics")
 
-	procCreateCompatibleDC    = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject          = gdi32.NewProc("SelectObject")
-	procBitBlt                = gdi32.NewProc("BitBlt")
-	procGetDIBits             = gdi32.NewProc("GetDIBits")
-	procDeleteObject          = gdi32.NewProc("DeleteObject")
-	procDeleteDC              = gdi32.NewProc("DeleteDC")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procGetDIBits              = gdi32.NewProc("GetDIBits")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
 )
 
 const (
-	swRestore      = 9
+	swRestore       = 9
 	sxVirtualScreen = 76
 	syVirtualScreen = 77
 	cxVirtualScreen = 78
@@ -154,6 +153,21 @@ func (d *windowsDesktop) MoveResize(w *Window, r Rect) error {
 	return nil
 }
 
+// Geometry reads the window rectangle back, since MoveWindow can clamp a
+// window that would extend past the edge of the desktop.
+func (d *windowsDesktop) Geometry(w *Window) (Rect, error) {
+	hwnd, err := handle(w)
+	if err != nil {
+		return Rect{}, err
+	}
+	var found rect
+	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&found)))
+	return Rect{
+		X: int(found.Left), Y: int(found.Top),
+		W: int(found.Right - found.Left), H: int(found.Bottom - found.Top),
+	}, nil
+}
+
 func (d *windowsDesktop) Capture() (image.Image, error) {
 	xr, _, _ := procGetSystemMetrics.Call(sxVirtualScreen)
 	yr, _, _ := procGetSystemMetrics.Call(syVirtualScreen)
@@ -186,10 +200,10 @@ func (d *windowsDesktop) Capture() (image.Image, error) {
 		return nil, fmt.Errorf("BitBlt failed")
 	}
 	info := bitmapInfo{Header: bitmapInfoHeader{
-		Size:    uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-		Width:   int32(w),
-		Height:  int32(h),
-		Planes:  1,
+		Size:     uint32(unsafe.Sizeof(bitmapInfoHeader{})),
+		Width:    int32(w),
+		Height:   int32(h),
+		Planes:   1,
 		BitCount: 32,
 	}}
 	pixels := make([]byte, w*h*4)
@@ -204,10 +218,10 @@ func (d *windowsDesktop) Capture() (image.Image, error) {
 		dst := row * img.Stride
 		for col := 0; col < w; col++ {
 			s, d := src+col*4, dst+col*4
-			img.Pix[d] = pixels[s+2]     // red
-			img.Pix[d+1] = pixels[s+1]   // green
-			img.Pix[d+2] = pixels[s]     // blue
-			img.Pix[d+3] = pixels[s+3]   // alpha
+			img.Pix[d] = pixels[s+2]   // red
+			img.Pix[d+1] = pixels[s+1] // green
+			img.Pix[d+2] = pixels[s]   // blue
+			img.Pix[d+3] = pixels[s+3] // alpha
 		}
 	}
 	return img, nil
@@ -239,16 +253,15 @@ func (d *windowsDesktop) Drag(x1, y1, x2, y2 int) error {
 	return nil
 }
 
-func (d *windowsDesktop) KeyPressed(key string) bool {
-	vks := map[string]uintptr{
-		"escape": 0x1B, "esc": 0x1B, "a": 0x41, "s": 0x53, "q": 0x51,
-	}
-	vk, ok := vks[strings.ToLower(key)]
-	if !ok {
-		return false
-	}
-	state, _, _ := procGetAsyncKeyState.Call(vk)
-	return state&0x8000 != 0
-}
-
 func (d *windowsDesktop) Requirements() []Requirement { return nil }
+
+func (d *windowsDesktop) Background() bool { return false }
+
+// EnsureSessionEnv is a no-op on Windows, where GuiResources come from the
+// process's own session.
+func EnsureSessionEnv() {}
+
+// BackgroundCapability reports whether a window can be driven while hidden.
+func BackgroundCapability() (bool, string) {
+	return false, "captures the visible screen and moves the pointer"
+}

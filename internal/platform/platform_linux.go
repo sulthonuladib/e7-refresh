@@ -13,33 +13,58 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type linuxDesktop struct {
-	session   string // "x11" or "wayland"
-	hyprland  bool
+	session    string // "x11" or "wayland"
+	hyprland   bool
 	screenshot string // first available screenshot program
 	input      string // first available input program
+
+	// target is the window FindWindow settled on. Hyprland can address it
+	// directly, so capture and clicks do not have to go through the screen.
+	target *Window
+
+	// foreground keeps the old pointer-moving path, for when a user asks for
+	// it. Background control is the default on Hyprland.
+	foreground bool
+
+	xOnce sync.Once
+	xIn   *xInput
+	xErr  error
 }
 
 // New returns the desktop implementation matching the current session.
+//
+// A systemd user service and a shell started outside the graphical session
+// often have none of the session variables set. In that case the compositor
+// socket under /run/user/<uid> names the session, so the daemon still finds
+// Hyprland's IPC and grim instead of falling back to X11 tools that are not
+// there.
 func New() Desktop {
+	signature := hyprlandSignature()
+	wayland := waylandDisplay()
 	session := strings.ToLower(os.Getenv("XDG_SESSION_TYPE"))
-	if session == "" {
-		switch {
-		case os.Getenv("WAYLAND_DISPLAY") != "":
-			session = "wayland"
-		case os.Getenv("DISPLAY") != "":
-			session = "x11"
-		}
+	switch {
+	case session == "wayland", session == "x11":
+	case wayland != "":
+		session = "wayland"
+	case os.Getenv("DISPLAY") != "":
+		session = "x11"
+	case signature != "":
+		session = "wayland"
+	default:
+		session = "x11"
 	}
 	if session != "wayland" {
 		session = "x11"
 	}
 	d := &linuxDesktop{
-		session:  session,
-		hyprland: os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "",
+		session:    session,
+		hyprland:   signature != "",
+		foreground: os.Getenv("E7_REFRESH_FOREGROUND") != "",
 	}
 	if session == "wayland" {
 		d.screenshot = firstAvailable("grim", "gnome-screenshot", "spectacle", "scrot", "import")
@@ -51,7 +76,134 @@ func New() Desktop {
 	return d
 }
 
+// hyprlandSignature returns the running compositor's instance signature,
+// filling in HYPRLAND_INSTANCE_SIGNATURE when the process was started
+// without the graphical session's environment.
+func hyprlandSignature() string {
+	if signature := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"); signature != "" {
+		return signature
+	}
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = fmt.Sprintf("/run/user/%d", os.Getuid())
+	}
+	entries, err := os.ReadDir(filepath.Join(runtimeDir, "hypr"))
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			signature := entry.Name()
+			_ = os.Setenv("HYPRLAND_INSTANCE_SIGNATURE", signature)
+			return signature
+		}
+	}
+	return ""
+}
+
+// waylandDisplay returns the session's Wayland socket, setting
+// WAYLAND_DISPLAY for grim and the other helpers when it is missing.
+func waylandDisplay() string {
+	if display := os.Getenv("WAYLAND_DISPLAY"); display != "" {
+		return display
+	}
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = fmt.Sprintf("/run/user/%d", os.Getuid())
+	}
+	entries, err := os.ReadDir(runtimeDir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "wayland-") && !strings.HasSuffix(name, ".lock") {
+			_ = os.Setenv("WAYLAND_DISPLAY", name)
+			return name
+		}
+	}
+	return ""
+}
+
 func (d *linuxDesktop) Kind() string { return d.session }
+
+// BackgroundCapability reports whether this desktop can capture and click a
+// window that is hidden and unfocused, and says how (or why not). The bar
+// panel shows it, so "Host mouse" is not mistaken for "moves my cursor".
+func BackgroundCapability() (bool, string) {
+	if signature := hyprlandSignature(); signature == "" {
+		return false, "needs Hyprland: other desktops move the pointer"
+	}
+	if firstAvailable("grim") == "" {
+		return false, "needs grim for window capture"
+	}
+	if err := probeXTEST(); err != nil {
+		return false, err.Error()
+	}
+	return true, "captures with grim -T and clicks inside Xwayland; cursor, focus and workspace stay put"
+}
+
+// Background reports whether the window found by FindWindow can be captured
+// and clicked while it stays hidden and unfocused.
+func (d *linuxDesktop) Background() bool { return d.backgroundWindow() != nil }
+
+// backgroundWindow returns the target when the background path applies: a
+// Wayland session on Hyprland, grim for capture, and a window that runs
+// through Xwayland, which keeps the X pointer sprite XTEST needs.
+func (d *linuxDesktop) backgroundWindow() *Window {
+	if d.foreground || d.session != "wayland" || !d.hyprland || d.screenshot != "grim" {
+		return nil
+	}
+	w := d.target
+	if w == nil || w.StableID == "" || !w.XWayland {
+		return nil
+	}
+	if _, err := d.xwaylandInput(); err != nil {
+		return nil
+	}
+	return w
+}
+
+// EnsureSessionEnv fills in the graphical session variables for processes
+// that were started from a shell which never inherited them: a kero/tmux
+// pane, a systemd unit, a bare login shell. The GUI needs WAYLAND_DISPLAY or
+// DISPLAY before it creates a window, and the service needs them to capture
+// and click the game.
+func EnsureSessionEnv() {
+	if os.Getenv("XDG_RUNTIME_DIR") == "" {
+		_ = os.Setenv("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid()))
+	}
+	if os.Getenv("WAYLAND_DISPLAY") == "" {
+		waylandDisplay()
+	}
+	if os.Getenv("DISPLAY") == "" {
+		x11Display()
+	}
+}
+
+// xwaylandInput opens the XTEST channel to the game window once per desktop.
+// The connection is reused for the whole run: the per-click cost is then a
+// warp plus two button events.
+func (d *linuxDesktop) xwaylandInput() (*xInput, error) {
+	d.xOnce.Do(func() {
+		w := d.target
+		if w == nil {
+			d.xErr = fmt.Errorf("no window found yet")
+			return
+		}
+		d.xIn, d.xErr = newXInput(w.Title, w.Class)
+	})
+	return d.xIn, d.xErr
+}
+
+// Close releases the X connection held for background input.
+func (d *linuxDesktop) Close() error {
+	if d.xIn != nil {
+		d.xIn.Close()
+		d.xIn = nil
+	}
+	return nil
+}
 
 func firstAvailable(names ...string) string {
 	for _, name := range names {
@@ -135,10 +287,13 @@ func (d *linuxDesktop) findHyprlandWindow(title string) (*Window, error) {
 		return nil, fmt.Errorf("hyprctl clients: %w", err)
 	}
 	var clients []struct {
-		Title   string `json:"title"`
-		Address string `json:"address"`
-		At      []int  `json:"at"`
-		Size    []int  `json:"size"`
+		Title    string `json:"title"`
+		Class    string `json:"class"`
+		Address  string `json:"address"`
+		StableID string `json:"stableId"`
+		XWayland bool   `json:"xwayland"`
+		At       []int  `json:"at"`
+		Size     []int  `json:"size"`
 	}
 	if err := json.Unmarshal(out, &clients); err != nil {
 		return nil, fmt.Errorf("hyprctl clients JSON: %w", err)
@@ -147,13 +302,40 @@ func (d *linuxDesktop) findHyprlandWindow(title string) (*Window, error) {
 		if c.Title != title || len(c.At) < 2 || len(c.Size) < 2 {
 			continue
 		}
-		return &Window{
-			Title: title,
-			ID:    c.Address,
-			Rect:  Rect{X: c.At[0], Y: c.At[1], W: c.Size[0], H: c.Size[1]},
-		}, nil
+		w := &Window{
+			Title:    title,
+			Class:    c.Class,
+			ID:       c.Address,
+			StableID: c.StableID,
+			XWayland: c.XWayland,
+			Rect:     Rect{X: c.At[0], Y: c.At[1], W: c.Size[0], H: c.Size[1]},
+		}
+		d.target = w
+		return w, nil
 	}
 	return nil, fmt.Errorf("no visible window titled %q", title)
+}
+
+// hyprGeometry reads one window's rectangle back from the compositor.
+func (d *linuxDesktop) hyprGeometry(address string) (Rect, error) {
+	out, err := Run(5*time.Second, "hyprctl", "-j", "clients")
+	if err != nil {
+		return Rect{}, err
+	}
+	var clients []struct {
+		Address string `json:"address"`
+		At      []int  `json:"at"`
+		Size    []int  `json:"size"`
+	}
+	if err := json.Unmarshal(out, &clients); err != nil {
+		return Rect{}, err
+	}
+	for _, c := range clients {
+		if c.Address == address && len(c.At) >= 2 && len(c.Size) >= 2 {
+			return Rect{X: c.At[0], Y: c.At[1], W: c.Size[0], H: c.Size[1]}, nil
+		}
+	}
+	return Rect{}, fmt.Errorf("window %s is gone", address)
 }
 
 func fallbackRect() (Rect, error) {
@@ -202,6 +384,11 @@ func (d *linuxDesktop) hyprDispatch(expression string, legacy ...string) error {
 }
 
 func (d *linuxDesktop) Activate(w *Window) error {
+	if d.backgroundWindow() != nil {
+		// Focusing would pull the user's workspace away, which is the whole
+		// thing this path exists to avoid.
+		return nil
+	}
 	if d.session == "wayland" {
 		if d.hyprland && w.ID != "" && w.ID != "absolute" {
 			return d.hyprDispatch(
@@ -215,6 +402,19 @@ func (d *linuxDesktop) Activate(w *Window) error {
 }
 
 func (d *linuxDesktop) MoveResize(w *Window, r Rect) error {
+	if d.backgroundWindow() != nil {
+		// Clicks and pixels are window-local, so the window only has to be
+		// the size the templates expect; leave its position alone so the
+		// user's layout is untouched.
+		current, err := d.hyprGeometry(w.ID)
+		if err != nil {
+			return err
+		}
+		if current.W == r.W && current.H == r.H {
+			return nil
+		}
+		return d.hyprResize(w.ID, current, r.W, r.H)
+	}
 	if d.session == "wayland" {
 		if !d.hyprland || w.ID == "" || w.ID == "absolute" {
 			return nil
@@ -222,14 +422,26 @@ func (d *linuxDesktop) MoveResize(w *Window, r Rect) error {
 		address := "address:" + w.ID
 		x, y, width, height := strconv.Itoa(r.X), strconv.Itoa(r.Y),
 			strconv.Itoa(r.W), strconv.Itoa(r.H)
+		// A tiled window ignores resizeactive. Hyprland's Lua float
+		// dispatcher toggles even with action = "set", so read the state and
+		// only float a window that is not floating. Resize before moving:
+		// Hyprland keeps a floating window's centre when it is resized, which
+		// is what made clicks land in the wrong place when the window was
+		// moved first.
+		floating, known := d.hyprWindowFloating(w.ID)
+		if known && !floating {
+			_ = d.hyprDispatch(
+				fmt.Sprintf(`hl.dsp.window.float({ window = "%s" })`, address),
+				"togglefloating", address)
+		}
 		if err := d.hyprDispatch(
-			fmt.Sprintf(`hl.dsp.window.move({ window = "%s", x = %s, y = %s, relative = false })`, address, x, y),
-			"moveactive", "exact", x, y); err != nil {
+			fmt.Sprintf(`hl.dsp.window.resize({ window = "%s", x = %s, y = %s, relative = false })`, address, width, height),
+			"resizeactive", "exact", width, height); err != nil {
 			return err
 		}
 		return d.hyprDispatch(
-			fmt.Sprintf(`hl.dsp.window.resize({ window = "%s", x = %s, y = %s, relative = false })`, address, width, height),
-			"resizeactive", "exact", width, height)
+			fmt.Sprintf(`hl.dsp.window.move({ window = "%s", x = %s, y = %s, relative = false })`, address, x, y),
+			"moveactive", "exact", x, y)
 	}
 	if _, err := Run(3*time.Second, "xdotool", "windowmove", w.ID,
 		strconv.Itoa(r.X), strconv.Itoa(r.Y)); err != nil {
@@ -240,7 +452,125 @@ func (d *linuxDesktop) MoveResize(w *Window, r Rect) error {
 	return err
 }
 
+// hyprResize changes a window's size without moving it. A tiled window
+// ignores resizeactive, so float it first when it is not floating yet.
+func (d *linuxDesktop) hyprResize(address string, current Rect, width, height int) error {
+	if !d.hyprland || address == "" || address == "absolute" {
+		return nil
+	}
+	window := "address:" + address
+	if floating, known := d.hyprWindowFloating(address); known && !floating {
+		_ = d.hyprDispatch(
+			fmt.Sprintf(`hl.dsp.window.float({ window = "%s" })`, window),
+			"togglefloating", window)
+	}
+	if err := d.hyprDispatch(
+		fmt.Sprintf(`hl.dsp.window.resize({ window = "%s", x = %d, y = %d, relative = false })`, window, width, height),
+		"resizeactive", "exact", strconv.Itoa(width), strconv.Itoa(height)); err != nil {
+		return err
+	}
+	// Resizing a floating window keeps its centre, which moves it. Put it back
+	// where it was so a hidden window does not wander.
+	return d.hyprDispatch(
+		fmt.Sprintf(`hl.dsp.window.move({ window = "%s", x = %d, y = %d, relative = false })`, window, current.X, current.Y),
+		"moveactive", "exact", strconv.Itoa(current.X), strconv.Itoa(current.Y))
+}
+
+// hyprWindowFloating reports whether a Hyprland window is floating. known is
+// false when hyprctl could not say, so the caller does not toggle blindly.
+func (d *linuxDesktop) hyprWindowFloating(address string) (floating, known bool) {
+	out, err := Run(3*time.Second, "hyprctl", "-j", "clients")
+	if err != nil {
+		return false, false
+	}
+	var clients []struct {
+		Address  string `json:"address"`
+		Floating bool   `json:"floating"`
+	}
+	if err := json.Unmarshal(out, &clients); err != nil {
+		return false, false
+	}
+	for _, c := range clients {
+		if c.Address == address {
+			return c.Floating, true
+		}
+	}
+	return false, false
+}
+
+// Geometry reads the window rectangle back from the compositor. Hyprland
+// re-centres a floating window while resizing, so the rectangle the macro
+// asked for is not necessarily the one the window has.
+func (d *linuxDesktop) Geometry(w *Window) (Rect, error) {
+	if d.backgroundWindow() != nil {
+		// Background capture is the window itself, so the rectangle always
+		// starts at the origin and only the size is read back.
+		rect, err := d.hyprGeometry(w.ID)
+		if err != nil {
+			return w.Rect, err
+		}
+		return Rect{X: 0, Y: 0, W: rect.W, H: rect.H}, nil
+	}
+	if d.session == "wayland" {
+		if !d.hyprland || w.ID == "" || w.ID == "absolute" {
+			return w.Rect, nil
+		}
+		rect, err := d.hyprGeometry(w.ID)
+		if err != nil {
+			return w.Rect, err
+		}
+		return rect, nil
+	}
+	if d.input == "xdotool" && w.ID != "" {
+		out, err := Run(2*time.Second, "xdotool", "getwindowgeometry", "--shell", w.ID)
+		if err != nil {
+			return w.Rect, err
+		}
+		rect := w.Rect
+		for _, line := range strings.Split(string(out), "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				continue
+			}
+			switch key {
+			case "X":
+				rect.X = n
+			case "Y":
+				rect.Y = n
+			case "WIDTH":
+				rect.W = n
+			case "HEIGHT":
+				rect.H = n
+			}
+		}
+		if rect.Valid() {
+			return rect, nil
+		}
+	}
+	return w.Rect, nil
+}
+
 func (d *linuxDesktop) Capture() (image.Image, error) {
+	if w := d.backgroundWindow(); w != nil {
+		// `grim -T <stableId>` renders that toplevel on its own: no
+		// workspace switch, no focus, and pixels of a window that is not on
+		// screen at all. There is deliberately no fallback to a screen grab:
+		// that image would be in screen coordinates and every crop after it
+		// would be wrong.
+		out, err := Run(10*time.Second, "grim", "-T", w.StableID, "-")
+		if err != nil {
+			return nil, fmt.Errorf("capture window %s: %w", w.StableID, err)
+		}
+		img, err := decode(out)
+		if err != nil {
+			return nil, fmt.Errorf("decode window capture: %w", err)
+		}
+		return img, nil
+	}
 	if d.screenshot == "" {
 		return nil, fmt.Errorf("no screenshot tool found (install grim on Wayland or imagemagick/scrot on X11)")
 	}
@@ -264,11 +594,11 @@ func (d *linuxDesktop) Capture() (image.Image, error) {
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "screen.png")
 	fileArgs := map[string][]string{
-		"scrot":           {"-o", path},
-		"maim":            {"-o", path},
+		"scrot":            {"-o", path},
+		"maim":             {"-o", path},
 		"gnome-screenshot": {"-f", path},
-		"spectacle":       {"-b", "-n", "-o", path},
-		"xwd":             {"-out", filepath.Join(dir, "screen.xwd")},
+		"spectacle":        {"-b", "-n", "-o", path},
+		"xwd":              {"-out", filepath.Join(dir, "screen.xwd")},
 	}
 	args, ok := fileArgs[d.screenshot]
 	if !ok {
@@ -294,6 +624,13 @@ func decode(data []byte) (image.Image, error) {
 }
 
 func (d *linuxDesktop) Click(x, y int) error {
+	if d.backgroundWindow() != nil {
+		in, err := d.xwaylandInput()
+		if err != nil {
+			return err
+		}
+		return in.Click(x, y)
+	}
 	xs, ys := strconv.Itoa(x), strconv.Itoa(y)
 	if d.input == "ydotool" {
 		// ydotool 1.0.4 aborts if mousemove and click share one invocation.
@@ -318,6 +655,13 @@ func (d *linuxDesktop) DoubleClick(x, y int, interval time.Duration) error {
 }
 
 func (d *linuxDesktop) Drag(x1, y1, x2, y2 int) error {
+	if d.backgroundWindow() != nil {
+		in, err := d.xwaylandInput()
+		if err != nil {
+			return err
+		}
+		return in.Drag(x1, y1, x2, y2)
+	}
 	a, b, c, e := strconv.Itoa(x1), strconv.Itoa(y1), strconv.Itoa(x2), strconv.Itoa(y2)
 	tool := d.input
 	if tool == "ydotool" {
@@ -346,15 +690,17 @@ func (d *linuxDesktop) Drag(x1, y1, x2, y2 int) error {
 	return err
 }
 
-func (d *linuxDesktop) KeyPressed(key string) bool { return false }
-
 func (d *linuxDesktop) Requirements() []Requirement {
 	var reqs []Requirement
-	if d.input == "" {
+	// On Hyprland the XWayland path needs no input program at all. Only ask
+	// for one when that path is not available, so a machine with grim alone
+	// is a complete install.
+	background := !d.foreground && d.session == "wayland" && d.hyprland && d.screenshot == "grim"
+	if d.input == "" && !background {
 		reqs = append(reqs, Requirement{
 			Tool:    "xdotool",
 			Why:     "mouse and window control (Wayland: ydotool)",
-			Install: "arch: pacman -S xdotool; debian: apt install xdotool; wayland: install ydotool",
+			Install: "arch: pacman -S xdotool; debian: apt install xdotool; wayland: pacman -S ydotool && systemctl --user enable --now ydotool",
 		})
 	}
 	if d.screenshot == "" {
