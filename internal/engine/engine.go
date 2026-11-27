@@ -30,8 +30,9 @@ type Stats struct {
 	StartedAt    time.Time     `json:"startedAt,omitempty"`
 	FinishedAt   time.Time     `json:"finishedAt,omitempty"`
 	RefreshCount int           `json:"refreshCount"`
-	Counts       map[string]int `json:"counts"`
-	Spent        int           `json:"spent"`
+	Counts       map[string]int  `json:"counts"`
+	Items        map[string]bool `json:"items"`
+	Spent        int             `json:"spent"`
 	Gold         int           `json:"gold"`
 	Window       string        `json:"window,omitempty"`
 	Budget       int           `json:"budget"`
@@ -66,6 +67,10 @@ func (e *Engine) Status() Stats {
 	out.Counts = make(map[string]int, len(e.stats.Counts))
 	for k, v := range e.stats.Counts {
 		out.Counts[k] = v
+	}
+	out.Items = make(map[string]bool, len(e.stats.Items))
+	for k, v := range e.stats.Items {
+		out.Items[k] = v
 	}
 	return out
 }
@@ -104,9 +109,14 @@ func (e *Engine) Start(c config.Config) error {
 	e.cancel = cancel
 	e.done = make(chan struct{})
 	e.cfg = c
+	items := map[string]bool{}
+	for id, enabled := range c.Items {
+		items[id] = enabled
+	}
 	e.stats = Stats{
 		Running: true, Mode: c.Mode, StartedAt: time.Now(),
-		Counts: map[string]int{}, Window: c.WindowTitle, Budget: c.Budget,
+		Counts: map[string]int{}, Items: items,
+		Window: c.WindowTitle, Budget: c.Budget,
 	}
 	e.mu.Unlock()
 	e.publish()
@@ -196,12 +206,21 @@ func enabled(c config.Config) []config.Item {
 	return items
 }
 
-func loadTemplates(kind string, items []config.Item) (map[string]*vision.Template, error) {
+func loadTemplates(kind string, c config.Config, items []config.Item) (map[string]*vision.Template, error) {
 	templates := map[string]*vision.Template{}
 	for _, item := range items {
-		path, err := assets.Pattern(kind, item.File)
-		if err != nil {
-			return nil, err
+		var path string
+		var err error
+		if c.TemplateDir != "" {
+			path = filepath.Join(c.TemplateDir, item.File)
+			if _, err = os.Stat(path); err != nil {
+				return nil, fmt.Errorf("custom template %s: %w", path, err)
+			}
+		} else {
+			path, err = assets.Pattern(kind, item.File)
+			if err != nil {
+				return nil, err
+			}
 		}
 		t, err := vision.LoadTemplate(item.ID, path)
 		if err != nil {
@@ -233,25 +252,10 @@ func crop(img image.Image, r platform.Rect) image.Image {
 	return out
 }
 
-// watchEscape lets a user stop a run with the configured key even when no
-// tray or bar is attached. On Wayland key state cannot be polled; the MyGo
-// global shortcut covers that case.
-func (e *Engine) watchEscape(ctx context.Context, d platform.Desktop, key string) {
-	go func() {
-		ticker := time.NewTicker(120 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if d.KeyPressed(key) {
-					e.Stop()
-					return
-				}
-			}
-		}
-	}()
+// watchStopKey listens on the whole session, including Wayland, by reading
+// keyboard event devices on Linux and GetAsyncKeyState on Windows.
+func (e *Engine) watchStopKey(ctx context.Context, key string) {
+	platform.WatchKey(ctx, key, func() { e.Stop() })
 }
 
 func (e *Engine) increment(id string) {
@@ -293,15 +297,15 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 	} else if err := desktop.MoveResize(window, window.Rect); err != nil {
 		return fmt.Errorf("resize window: %w", err)
 	}
-	templates, err := loadTemplates("assets", enabled(c))
+	templates, err := loadTemplates("assets", c, enabled(c))
 	if err != nil {
 		return err
 	}
-	e.watchEscape(ctx, desktop, c.StopHotkey)
+	e.watchStopKey(ctx, c.StopHotkey)
 	if !sleep(ctx, duration(c.MouseSleep, 0.01)) {
 		return ctx.Err()
 	}
-	if err := clickShop(desktop, window.Rect, duration(c.MouseSleep, 0.01)); err != nil {
+	if err := clickShop(ctx, desktop, window.Rect, duration(c.MouseSleep, 0.01)); err != nil {
 		return err
 	}
 	if !sleep(ctx, time.Second) {
@@ -323,11 +327,11 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 		}
 		bought := map[string]bool{}
 		for id, template := range templates {
-			x, y, _, ok := screen.Match(template, 0.70)
+			x, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
 			if !ok {
 				continue
 			}
-			if err := buyMouse(desktop, window.Rect, y, c); err != nil {
+			if err := buyMouse(ctx, desktop, window.Rect, y, c); err != nil {
 				return err
 			}
 			e.increment(id)
@@ -351,11 +355,11 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 			if bought[id] {
 				continue
 			}
-			_, y, _, ok := screen.Match(template, 0.70)
+			_, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
 			if !ok {
 				continue
 			}
-			if err := buyMouse(desktop, window.Rect, y, c); err != nil {
+			if err := buyMouse(ctx, desktop, window.Rect, y, c); err != nil {
 				return err
 			}
 			e.increment(id)
@@ -363,7 +367,7 @@ func (e *Engine) runMouse(ctx context.Context, c config.Config) error {
 		if e.overBudget(c) {
 			break
 		}
-		if err := refreshMouse(desktop, window.Rect, c); err != nil {
+		if err := refreshMouse(ctx, desktop, window.Rect, c); err != nil {
 			return err
 		}
 		e.incrementRefresh()
@@ -387,7 +391,7 @@ func grabWindow(d platform.Desktop, r platform.Rect) (*vision.Screen, error) {
 	return vision.Prepare(crop(frame, r)), nil
 }
 
-func clickShop(d platform.Desktop, r platform.Rect, pause time.Duration) error {
+func clickShop(ctx context.Context, d platform.Desktop, r platform.Rect, pause time.Duration) error {
 	clicks := []struct{ x, y float64 }{
 		{0.05, 0.41}, {0.44, 0.26}, {0.05, 0.41},
 	}
@@ -395,14 +399,14 @@ func clickShop(d platform.Desktop, r platform.Rect, pause time.Duration) error {
 		if err := d.Click(r.X+int(float64(r.W)*p.x), r.Y+int(float64(r.H)*p.y)); err != nil {
 			return err
 		}
-		if !sleep(context.Background(), pause) {
+		if !sleep(ctx, pause) {
 			return context.Canceled
 		}
 	}
 	return nil
 }
 
-func buyMouse(d platform.Desktop, r platform.Rect, matchY int, c config.Config) error {
+func buyMouse(ctx context.Context, d platform.Desktop, r platform.Rect, matchY int, c config.Config) error {
 	x := r.X + int(float64(r.W)*0.90)
 	y := r.Y + matchY + int(float64(r.H)*0.085)
 	if err := d.DoubleClick(x, y, duration(c.MouseSleep, 0.01)); err != nil {
@@ -419,11 +423,11 @@ func buyMouse(d platform.Desktop, r platform.Rect, matchY int, c config.Config) 
 		return err
 	}
 	// Loading after a purchase needs the same pause the upstream app takes.
-	sleep(context.Background(), duration(c.ScreenshotSleep, 0.01))
+	sleep(ctx, duration(c.ScreenshotSleep, 0.01))
 	return nil
 }
 
-func refreshMouse(d platform.Desktop, r platform.Rect, c config.Config) error {
+func refreshMouse(ctx context.Context, d platform.Desktop, r platform.Rect, c config.Config) error {
 	if err := d.DoubleClick(
 		r.X+int(float64(r.W)*0.20),
 		r.Y+int(float64(r.H)*0.90),
@@ -439,7 +443,7 @@ func refreshMouse(d platform.Desktop, r platform.Rect, c config.Config) error {
 	if err := d.DoubleClick(x, y, duration(c.MouseSleep, 0.01)); err != nil {
 		return err
 	}
-	sleep(context.Background(), duration(c.ScreenshotSleep, 0.01))
+	sleep(ctx, duration(c.ScreenshotSleep, 0.01))
 	return nil
 }
 
@@ -486,7 +490,7 @@ func (e *Engine) runADB(ctx context.Context, c config.Config) error {
 	if w != 1920 || h != 1080 {
 		return fmt.Errorf("device resolution is %dx%d; set the emulator to 1920x1080", w, h)
 	}
-	templates, err := loadTemplates("adb-assets", enabled(c))
+	templates, err := loadTemplates("adb-assets", c, enabled(c))
 	if err != nil {
 		return err
 	}
@@ -514,7 +518,7 @@ func (e *Engine) runADB(ctx context.Context, c config.Config) error {
 		}
 		bought := map[string]bool{}
 		for id, template := range templates {
-			x, y, _, ok := screen.Match(template, 0.75)
+			x, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
 			if !ok {
 				continue
 			}
@@ -543,7 +547,7 @@ func (e *Engine) runADB(ctx context.Context, c config.Config) error {
 			if bought[id] {
 				continue
 			}
-			x, y, _, ok := screen.Match(template, 0.75)
+			x, y, _, ok := screen.MatchBest(template, c.MatchThreshold)
 			if !ok {
 				continue
 			}

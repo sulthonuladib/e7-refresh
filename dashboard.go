@@ -32,6 +32,9 @@ type dashboard struct {
 	adbAddress      string
 	trayEnabled     bool
 	trayApplied     bool
+	hint            bool
+	matchThreshold  float64
+	templateDir     string
 	message         string
 }
 
@@ -61,6 +64,9 @@ func (d *dashboard) setConfig(cfg config.Config) {
 	d.adbAddress = cfg.ADBAddress
 	d.trayEnabled = cfg.TrayEnabled
 	d.trayApplied = cfg.TrayEnabled
+	d.hint = cfg.Hint
+	d.matchThreshold = cfg.MatchThreshold
+	d.templateDir = cfg.TemplateDir
 }
 
 func (d *dashboard) setStatus(s engine.Stats) { d.status = s }
@@ -83,6 +89,9 @@ func (d *dashboard) currentConfig() config.Config {
 	cfg.TapSleep = d.tapSleep
 	cfg.ADBAddress = d.adbAddress
 	cfg.TrayEnabled = d.trayEnabled
+	cfg.Hint = d.hint
+	cfg.MatchThreshold = d.matchThreshold
+	cfg.TemplateDir = d.templateDir
 	cfg.Normalize()
 	return cfg
 }
@@ -161,84 +170,126 @@ func (d *dashboard) stateLine() string {
 }
 
 func (d *dashboard) view(c *ui.Context) {
-	ui.Column(c).Padding(20).Gap(8).Children(func() {
-		ui.Text(c, "E7 Secret Shop Refresh").FontSize(19).Bold()
-		ui.Text(c, d.stateLine())
-		ui.Row(c).Gap(8).Children(func() {
-			if d.status.Running {
-				if ui.Button(c, "Stop").Clicked() {
-					d.stop()
+	ui.Scroll(c).Fill().Children(func() {
+		ui.Column(c).Padding(18).Gap(14).Fill().Children(func() {
+			ui.Row(c).Gap(10).Children(func() {
+				ui.Text(c, "E7 Secret Shop Refresh").FontSize(18).Bold()
+				if d.status.Running {
+					ui.Box(c).Background(ui.RGB(255, 214, 10)).Radius(4).Padding(4, 8).Children(func() {
+						ui.Text(c, "RUNNING").FontSize(11).Bold()
+					})
 				}
-			} else if ui.PrimaryButton(c, "Start refresh").Clicked() {
-				d.start()
-			}
-			if ui.Button(c, "Hide").Clicked() && d.win != nil {
-				d.win.Hide()
-			}
-		})
-		ui.Text(c, d.message)
-
-		ui.Divider(c)
-		ui.Text(c, "Emulator window title").Bold()
-		ui.TextInput(c, &d.title)
-
-		ui.Text(c, "Mode: "+d.mode)
-		if ui.Button(c, "Toggle mouse / ADB").Clicked() {
-			if d.mode == "adb" {
-				d.setMode("mouse")
-			} else {
-				d.setMode("adb")
-			}
-		}
-		ui.Checkbox(c, &d.trayEnabled, "Show tray icon")
-		if d.trayEnabled != d.trayApplied {
-			d.applyTray()
-		}
-
-		ui.Text(c, "Items to buy").Bold()
-		ui.Row(c).Gap(12).Children(func() {
-			ui.Checkbox(c, &d.buyCov, "Covenant")
-			ui.Checkbox(c, &d.buyMys, "Mystic")
-			ui.Checkbox(c, &d.buyFb, "Friendship")
-		})
-
-		ui.Text(c, "Skystone budget (0 = until stopped)")
-		ui.NumberInput(c, &d.budget, 0, 100000, 100)
-		ui.Text(c, "Mouse speed (seconds)")
-		ui.NumberInput(c, &d.mouseSleep, 0.01, 10, 0.1)
-		ui.Text(c, "Screenshot speed (seconds)")
-		ui.NumberInput(c, &d.screenshotSleep, 0.01, 10, 0.1)
-		ui.Text(c, "ADB tap speed (seconds)")
-		ui.NumberInput(c, &d.tapSleep, 0.01, 10, 0.1)
-		ui.Text(c, "ADB address").Bold()
-		ui.TextInput(c, &d.adbAddress)
-
-		ui.Row(c).Gap(8).Children(func() {
-			if ui.PrimaryButton(c, "Save settings").Clicked() {
-				d.save()
-			}
-			if ui.Button(c, "Open history").Clicked() {
-				go mygo.Shell.OpenPath(config.HistoryDir())
-			}
-		})
-		serviceLabel := "Install background service"
-		if _, err := os.Stat(serviceUnitPath()); err == nil {
-			serviceLabel = "Remove background service"
-		}
-		if ui.Button(c, serviceLabel).Clicked() {
-			go func() {
-				var err error
-				if _, statErr := os.Stat(serviceUnitPath()); statErr == nil {
-					err = removeServiceE()
-				} else {
-					err = installServiceE()
+			})
+			ui.Text(c, d.stateLine()).FontSize(13)
+			ui.Row(c).Gap(10).Children(func() {
+				if d.status.Running {
+					if ui.Button(c, "Stop refresh").Clicked() {
+						d.stop()
+					}
+				} else if ui.PrimaryButton(c, "Start refresh").Clicked() {
+					d.start()
 				}
-				message := "Background service updated"
-				if err != nil {
-					message = err.Error()
+				if ui.Button(c, "Hide window").Clicked() && d.win != nil {
+					d.win.Hide()
 				}
-				mygo.RunOnMain(func() { d.message = message })
-			}()
-		}
+			})
+			if d.message != "" {
+				ui.Text(c, d.message).FontSize(12)
+			}
+			ui.Divider(c)
+
+			ui.Row(c).Gap(24).Children(func() {
+				ui.Column(c).Gap(10).Fill().Children(func() {
+					section(c, "Refresh")
+					field(c, "Mode", func() {
+						ui.Select(c, &d.mode, []string{"mouse", "adb"})
+						if d.mode != d.cfg.Mode {
+							d.setMode(d.mode)
+						}
+					})
+					section(c, "Items to buy")
+					itemCheckbox(c, "cov", "Covenant", &d.buyCov)
+					itemCheckbox(c, "mys", "Mystic", &d.buyMys)
+					itemCheckbox(c, "fb", "Friendship", &d.buyFb)
+					field(c, "Skystone budget (0 = until stopped)", func() {
+						ui.NumberInput(c, &d.budget, 0, 100000, 100)
+					})
+					ui.Checkbox(c, &d.hint, "Show bought-items overlay")
+					field(c, "Match sensitivity (lower finds more)", func() {
+						ui.NumberInput(c, &d.matchThreshold, 0.4, 0.95, 0.01)
+					})
+				})
+
+				ui.Column(c).Gap(10).Fill().Children(func() {
+					section(c, "Setup")
+					field(c, "Emulator window title", func() { ui.TextInput(c, &d.title) })
+					field(c, "Mouse speed (seconds)", func() {
+						ui.NumberInput(c, &d.mouseSleep, 0.01, 10, 0.1)
+					})
+					field(c, "Screenshot speed (seconds)", func() {
+						ui.NumberInput(c, &d.screenshotSleep, 0.01, 10, 0.1)
+					})
+					field(c, "ADB tap speed (seconds)", func() {
+						ui.NumberInput(c, &d.tapSleep, 0.01, 10, 0.1)
+					})
+					field(c, "ADB address", func() { ui.TextInput(c, &d.adbAddress) })
+					field(c, "Custom template folder (optional)", func() {
+						ui.TextInput(c, &d.templateDir)
+					})
+					ui.Checkbox(c, &d.trayEnabled, "Show tray icon")
+					if d.trayEnabled != d.trayApplied {
+						d.applyTray()
+					}
+					serviceButton(c, d)
+				})
+			})
+
+			ui.Row(c).Gap(10).Children(func() {
+				if ui.PrimaryButton(c, "Save settings").Clicked() {
+					d.save()
+				}
+				if ui.Button(c, "Open history").Clicked() {
+					go mygo.Shell.OpenPath(config.HistoryDir())
+				}
+			})
+		})
 	})
+}
+
+func section(c *ui.Context, title string) {
+	ui.Text(c, title).FontSize(15).Bold()
+}
+
+func field(c *ui.Context, label string, control func()) {
+	ui.Text(c, label).FontSize(12)
+	control()
+}
+
+func itemCheckbox(c *ui.Context, id, label string, checked *bool) {
+	ui.Row(c).Gap(8).Children(func() {
+		ui.Box(c).Width(9).Height(9).Radius(5).Background(itemColor(id))
+		ui.Checkbox(c, checked, label)
+	})
+}
+
+func serviceButton(c *ui.Context, d *dashboard) {
+	label := "Install background service"
+	if _, err := os.Stat(serviceUnitPath()); err == nil {
+		label = "Remove background service"
+	}
+	if ui.Button(c, label).Clicked() {
+		go func() {
+			var err error
+			if _, statErr := os.Stat(serviceUnitPath()); statErr == nil {
+				err = removeServiceE()
+			} else {
+				err = installServiceE()
+			}
+			message := "Background service updated"
+			if err != nil {
+				message = err.Error()
+			}
+			mygo.RunOnMain(func() { d.message = message })
+		}()
+	}
 }

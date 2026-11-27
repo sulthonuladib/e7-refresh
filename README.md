@@ -32,7 +32,16 @@ Two modes, carried over from the upstream app:
 
 Covenant and mystic bookmarks stay enabled; friendship bookmarks are optional
 and are the safest way to check that matching works before leaving it alone.
-Each run appends a CSV row to `~/.local/share/e7-refresh/ShopRefreshHistory`.
+Selection, match sensitivity and an optional folder of custom templates are
+all editable in the app window and the Omarchy panel. Templates are matched
+across several nearby scales, so a Steam/Proton client rendering the icons at
+a different pixel size still works. Each run appends a CSV row to
+`~/.local/share/e7-refresh/ShopRefreshHistory`.
+
+**Stop anytime:** press `Esc` (or the configured stop key) anywhere in the
+session. On Linux the app reads keyboard event devices directly, so this works
+on X11 and Wayland without a compositor shortcut. The tray menu, bar widget,
+settings window and `e7-refresh stop` work too.
 
 ## Build
 
@@ -104,10 +113,13 @@ e7-refresh install-bar
 omarchy restart shell   # only if the widget does not appear
 ```
 
-The widget shows `E7` when idle and `E7 <refreshes>` while refreshing. Left
-click starts/stops; middle click opens the settings window. The installer
-copies files to `~/.config/omarchy/plugins/e7-refresh`, backs up
-`shell.json`, and never edits `/usr/share/omarchy`.
+The widget shows `E7` when idle; while refreshing it shows bought counts for
+the selected kinds (C/M/F) and spent skystones, e.g. `E7 C2 M1 · 21`. Left
+click opens a settings panel in the Omarchy shell with item selection, budget
+and live stats; right click starts or stops. Omarchy uses this panel instead
+of a separate overlay window. The installer copies files to
+`~/.config/omarchy/plugins/e7-refresh`, backs up `shell.json`, and never edits
+`/usr/share/omarchy`.
 
 ### Other desktops and bars
 
@@ -147,7 +159,10 @@ e7-refresh config --set '{"mode":"adb","budget":1000,"items":{"cov":true,"mys":t
 | `allowMove` | `false` | Leave the emulator where it is instead of moving it to 0,0 |
 | `randomOffset` | `false` | Small jitter on ADB taps |
 | `adbAddress` | `127.0.0.1:5555` | Device to connect |
-| `stopHotkey` | `Escape` | Global stop shortcut (fallbacks: `Ctrl+Shift+S`, tray, bar, CLI) |
+| `stopHotkey` | `Escape` | Session-wide stop key, read from keyboard devices on Linux |
+| `hint` | `true` | Small bought-items overlay on non-Omarchy desktops |
+| `matchThreshold` | `0.62` | Lower to detect icons rendered slightly differently |
+| `templateDir` | empty | Folder containing your own `cov.png`, `mys.png`, `fb.png` crops |
 
 Press the stop shortcut, choose **Stop refresh**, or run `e7-refresh stop`
 to finish after the current action. Always verify that the program recognises

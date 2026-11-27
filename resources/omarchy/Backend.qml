@@ -9,6 +9,7 @@ Scope {
   id: root
 
   property var status: ({})
+  property var config: ({})
   property bool connected: !!sock && sock.connected
   property string socketPath: ""
   property string token: ""
@@ -82,7 +83,12 @@ Scope {
         onRead: data => root.handle(data)
       }
       onConnectedChanged: {
-        if (connected) root.call("status", null)
+        if (connected) {
+          root.call("get-config", function (msg) {
+            if (msg.ok && msg.config) root.config = msg.config
+          })
+          root.call("status", null)
+        }
       }
       onError: function () {}
     }
@@ -107,15 +113,34 @@ Scope {
     }
   }
 
-  function call(cmd, cb) {
+  function call(cmd, cb, extra) {
     if (!sock || !sock.connected || root.token === "") {
       if (cb) cb({ ok: false, error: "e7-refresh service is not running" })
       return
     }
     var id = String(root.nextId++)
     if (cb) root.pending[id] = cb
-    sock.write(JSON.stringify({ id: id, token: root.token, cmd: cmd }) + "\n")
+    var request = { id: id, token: root.token, cmd: cmd }
+    if (extra) {
+      for (var key in extra) request[key] = extra[key]
+    }
+    sock.write(JSON.stringify(request) + "\n")
     sock.flush()
+  }
+
+  // Merge a patch into the saved settings and write them atomically.
+  function set(patch) {
+    var cfg = JSON.parse(JSON.stringify(root.config || {}))
+    for (var key in patch) cfg[key] = patch[key]
+    root.call("set-config", function (msg) {
+      if (msg.ok) root.config = cfg
+    }, { config: cfg })
+  }
+
+  function setItem(id, checked) {
+    var items = JSON.parse(JSON.stringify(root.config.items || {}))
+    items[id] = checked
+    root.set({ items: items })
   }
 
   function toggle() {

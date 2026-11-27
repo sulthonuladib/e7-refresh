@@ -3,10 +3,11 @@
   "id": "e7-refresh",
   "name": "E7 Refresh",
   "version": "0.1.0",
-  "description": "Shows the Epic Seven secret shop refresh state in the Omarchy bar. Click to start or stop, middle-click to open settings.",
-  "kinds": ["bar-widget"],
+  "description": "Shows Epic Seven refresh counts and skystones in the Omarchy bar. Click for the settings panel, right-click to start or stop.",
+  "kinds": ["bar-widget", "panel"],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
   },
   "barWidget": {
     "displayName": "E7 Refresh",

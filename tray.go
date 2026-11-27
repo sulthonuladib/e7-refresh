@@ -54,6 +54,8 @@ func (h *trayHolder) update(stats engine.Stats) {
 }
 
 func runApp(client *daemon.Client, server *daemon.Server) {
+	// The app lives next to a dark desktop; keep its own surfaces dark too.
+	mygo.Theme.SetSource(mygo.ThemeDark)
 	dash := newDashboard(client)
 	holder := &trayHolder{}
 	mygo.App.WhenReady(func() {
@@ -96,8 +98,14 @@ func runApp(client *daemon.Client, server *daemon.Server) {
 		if dash.cfg.TrayEnabled {
 			holder.set(buildTray(client, dash))
 		}
+		var overlay *overlay
+		// Omarchy shows these numbers in its bar widget instead; other
+		// desktops keep the small always-on-top readout.
+		if desktop.Detect().Desktop != "omarchy" {
+			overlay = newOverlay()
+		}
 		registerHotkeys(client, dash.cfg.StopHotkey)
-		go pollState(client, dash, holder)
+		go pollState(client, dash, holder, overlay)
 		// Opening the app from the launcher or menu shows its window.
 		win.Show()
 		win.Focus()
@@ -275,7 +283,7 @@ func updateTray(refs *trayRefs, s engine.Stats) {
 	refs.lastRun = s.Running
 }
 
-func pollState(client *daemon.Client, dash *dashboard, holder *trayHolder) {
+func pollState(client *daemon.Client, dash *dashboard, holder *trayHolder, overlay *overlay) {
 	if response, err := client.Call(daemon.Request{Cmd: "get-config"}); err == nil && response.Config != nil {
 		cfg := *response.Config
 		mygo.RunOnMain(func() { dash.setConfig(cfg) })
@@ -288,7 +296,12 @@ func pollState(client *daemon.Client, dash *dashboard, holder *trayHolder) {
 			continue
 		}
 		s := *response.Status
-		mygo.RunOnMain(func() { dash.setStatus(s) })
+		mygo.RunOnMain(func() {
+			dash.setStatus(s)
+			if overlay != nil {
+				overlay.set(s, dash.cfg.Hint)
+			}
+		})
 		holder.update(s)
 	}
 }

@@ -3,8 +3,8 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 
-// The bar widget: "E7" while idle, "E7 <refreshes>" while refreshing.
-// Left click starts or stops a run, middle click opens the settings window.
+// The bar widget: active counts and skystones while a run is live, "E7"
+// when idle. Left click opens the panel, right click starts or stops.
 BarWidget {
   id: root
   moduleName: "e7-refresh"
@@ -13,44 +13,58 @@ BarWidget {
 
   readonly property var status: backend.status || ({})
   readonly property bool running: !!status.running
-  readonly property string label: running ? ("E7 " + (status.refreshCount || 0)) : "E7"
-  readonly property string tooltipText: running
-    ? "E7 Refresh · refreshing · " + (status.refreshCount || 0) + " refreshes · " + (status.spent || 0) + " skystones"
-    : "E7 Refresh · idle · click to start"
 
-  implicitWidth: row.implicitWidth + Style.space(12)
+  function counts() {
+    var selected = status.items || ({})
+    var bought = status.counts || ({})
+    var parts = []
+    if (selected.cov) parts.push("C" + (bought.cov || 0))
+    if (selected.mys) parts.push("M" + (bought.mys || 0))
+    if (selected.fb) parts.push("F" + (bought.fb || 0))
+    return parts
+  }
+
+  readonly property string label: {
+    if (!root.running) return "E7"
+    var parts = root.counts()
+    return "E7 " + (parts.length ? parts.join(" ") : "0") + " · " + (status.spent || 0)
+  }
+
+  readonly property string tooltipText: {
+    var s = root.status
+    if (!root.running)
+      return "E7 Refresh · idle · click for settings"
+    return "E7 Refresh · " + (s.refreshCount || 0) + " refreshes · " + (s.spent || 0) +
+      " skystones\n" + (root.counts().join("   ") || "no items selected")
+  }
+
+  implicitWidth: labelText.implicitWidth + Style.space(14)
   implicitHeight: barSize
 
-  Row {
-    id: row
+  Text {
+    id: labelText
     anchors.centerIn: parent
-    spacing: Style.space(6)
-
-    Text {
-      text: root.running ? "▶" : "■"
-      color: root.running && root.bar ? root.bar.barForeground : Qt.darker(root.bar ? root.bar.barForeground : "white", 1.4)
-      font.family: root.bar ? root.bar.fontFamily : ""
-      font.pixelSize: Style.font.body
-      anchors.verticalCenter: parent.verticalCenter
-    }
-
-    Text {
-      text: root.label
-      color: root.bar ? root.bar.barForeground : "white"
-      font.family: root.bar ? root.bar.fontFamily : ""
-      font.pixelSize: Style.font.body
-      anchors.verticalCenter: parent.verticalCenter
-    }
+    text: root.label
+    textFormat: Text.PlainText
+    color: root.bar ? root.bar.barForeground : Commons.Color.foreground
+    font.family: root.bar ? root.bar.fontFamily : Style.fontFamily
+    font.pixelSize: Style.font.body
   }
 
   MouseArea {
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
     onClicked: function (mouse) {
-      if (mouse.button === Qt.MiddleButton) backend.open()
-      else backend.toggle()
+      if (mouse.button !== Qt.LeftButton) {
+        backend.toggle()
+        return
+      }
+      if (root.bar && root.bar.shell && typeof root.bar.shell.toggle === "function")
+        root.bar.shell.toggle(root.moduleName, "{}")
+      else
+        backend.open()
     }
     onEntered: if (root.bar) root.bar.showTooltip(root, root.tooltipText)
     onExited: if (root.bar) root.bar.hideTooltip(root)

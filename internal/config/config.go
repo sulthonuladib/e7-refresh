@@ -48,6 +48,8 @@ type Config struct {
 	ADBPath         string          `json:"adbPath"`
 	StopHotkey      string          `json:"stopHotkey"`
 	TrayEnabled     bool            `json:"trayEnabled"`
+	MatchThreshold  float64         `json:"matchThreshold"`
+	TemplateDir     string          `json:"templateDir"`
 	AutoStart       bool            `json:"autoStart"`
 }
 
@@ -64,6 +66,7 @@ func Default() Config {
 		Hint:            true,
 		StopHotkey:      "Escape",
 		TrayEnabled:     true,
+		MatchThreshold:  0.62,
 	}
 }
 
@@ -99,6 +102,12 @@ func (c *Config) Normalize() {
 	}
 	if c.Budget < 0 {
 		c.Budget = 0
+	}
+	if c.MatchThreshold <= 0 {
+		c.MatchThreshold = def.MatchThreshold
+	}
+	if c.MatchThreshold > 0.95 {
+		c.MatchThreshold = 0.95
 	}
 	if c.StopHotkey == "" {
 		c.StopHotkey = def.StopHotkey

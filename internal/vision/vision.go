@@ -105,6 +105,44 @@ func Prepare(img image.Image) *Screen {
 		sum: sum, sumSq: sumSq, sumW: sw, sumH: sh}
 }
 
+// Scaled returns a copy of the template resized by factor. Game clients
+// render the same bookmark icon at slightly different pixel sizes, so the
+// matcher searches a few nearby scales before giving up.
+func (t *Template) Scaled(factor float64) *Template {
+	w := max(1, int(math.Round(float64(t.W)*factor)))
+	h := max(1, int(math.Round(float64(t.H)*factor)))
+	gray := make([]uint8, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			srcX := min(t.W-1, int(float64(x)/factor))
+			srcY := min(t.H-1, int(float64(y)/factor))
+			gray[y*w+x] = t.Gray[srcY*t.W+srcX]
+		}
+	}
+	scaled := &Template{Name: t.Name, Gray: gray, W: w, H: h}
+	scaled.meanF, scaled.varF = stats(gray, w, h)
+	scaled.coarse, scaled.cw, scaled.ch = downsample(gray, w, h, Scale)
+	scaled.meanC, scaled.varC = stats(scaled.coarse, scaled.cw, scaled.ch)
+	return scaled
+}
+
+// MatchBest tries the template at several scales and returns the strongest
+// hit. Positions are relative to the screenshot.
+func (s *Screen) MatchBest(t *Template, threshold float64) (int, int, float64, bool) {
+	bestX, bestY, bestScore := 0, 0, -1.0
+	for _, factor := range []float64{0.8, 0.9, 1, 1.1, 1.2, 1.35} {
+		scaled := t
+		if factor != 1 {
+			scaled = t.Scaled(factor)
+		}
+		x, y, score, ok := s.Match(scaled, threshold)
+		if ok && score > bestScore {
+			bestX, bestY, bestScore = x, y, score
+		}
+	}
+	return bestX, bestY, bestScore, bestScore >= threshold
+}
+
 // Match returns the top-left position and score of the best occurrence of t.
 // Positions are relative to the screenshot, with (0,0) at its top-left.
 func (s *Screen) Match(t *Template, threshold float64) (int, int, float64, bool) {
