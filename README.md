@@ -56,10 +56,15 @@ make install                   # Arch Linux: build PKGBUILD and makepkg -fsi
 
 `bin/build-all` produces, per Linux architecture, a `.deb`, an `.rpm`, a
 PKGBUILD, a tarball with `install.sh`, and a desktop entry. Windows builds
-produce `e7-refresh.exe`; set `WITH_INSTALLER=1` with NSIS installed to also
-build the setup executable. Releases are manual: tag the commit, then
-`./bin/release v0.1.0` creates a draft GitHub release with the artifacts.
-CI for automatic builds and releases comes later.
+produce `E7 Refresh.exe`; set `WITH_INSTALLER=1` with NSIS installed to also
+build the setup executable.
+
+**Releases are tag-driven.** Pushing a tag like `v0.1.0` runs
+`.github/workflows/release.yml`, which builds Linux (amd64/arm64) and Windows
+(amd64/arm64) packages, collects them with platform-prefixed names and a
+`SHA256SUMS` file, and publishes a GitHub release with generated notes. The
+tag itself is the manual trigger; `./bin/release v0.1.0` remains as a local
+fallback for creating a draft release from an already-built tree.
 
 ## Linux
 
